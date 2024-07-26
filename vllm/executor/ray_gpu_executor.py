@@ -411,16 +411,18 @@ class RayGPUExecutor(DistributedGPUExecutor):
 
         logger.info("VLLM_USE_RAY_COMPILED_DAG_NCCL = %s",
                     envs.VLLM_USE_RAY_COMPILED_DAG_NCCL)
+
         with InputNode() as input_data:
             # Example DAG: PP=2, TP=4
+            #                        stage #1                                      stage #2                 # noqa: E501
             # (ExecuteModelReq, None) -> 0 -> (ExecuteModelReq, IntermediateOutput) -> 4 -> SamplerOutput   # noqa: E501
-            #                         -> 1 -> (ExecuteModelReq, IntermediateOutput) -> 5 -> SamplerOutput   # noqa: E501
-            #                         -> 2 -> (ExecuteModelReq, IntermediateOutput) -> 6 -> SamplerOutput   # noqa: E501
-            #                         -> 3 -> (ExecuteModelReq, IntermediateOutput) -> 7 -> SamplerOutput   # noqa: E501
-            # All workers in the first TP group will take in the
+            # (ExecuteModelReq, None) -> 1 -> (ExecuteModelReq, IntermediateOutput) -> 5 -> SamplerOutput   # noqa: E501
+            # (ExecuteModelReq, None) -> 2 -> (ExecuteModelReq, IntermediateOutput) -> 6 -> SamplerOutput   # noqa: E501
+            # (ExecuteModelReq, None) -> 3 -> (ExecuteModelReq, IntermediateOutput) -> 7 -> SamplerOutput   # noqa: E501
 
+            # All workers in the first TP group will take in the
             # ExecuteModelRequest as input.
-            outputs = [input_data for _ in self.pp_tp_workers[0]]
+            outputs = [(input_data, None) for _ in self.pp_tp_workers[0]]
             for pp_rank, tp_group in enumerate(self.pp_tp_workers):
                 # Each PP worker takes in the output of the previous PP worker.
                 outputs = [
@@ -435,7 +437,8 @@ class RayGPUExecutor(DistributedGPUExecutor):
                     if envs.VLLM_USE_RAY_COMPILED_DAG_NCCL:
                         # Transfer the tensors through NCCL.
                         outputs = [
-                            output.with_type_hint(
+                            output.
+                            with_type_hint(  # type: ignore[attr-defined]
                                 TorchTensorType(transport="nccl"))
                             for output in outputs
                         ]
@@ -443,8 +446,9 @@ class RayGPUExecutor(DistributedGPUExecutor):
                         # Just transfer the tensors through Ray's shared memory
                         # store.
                         outputs = [
-                            output.with_type_hint(TorchTensorType())
-                            for output in outputs
+                            output.
+                            with_type_hint(  # type: ignore[attr-defined]
+                                TorchTensorType()) for output in outputs
                         ]
 
             forward_dag = MultiOutputNode(outputs)

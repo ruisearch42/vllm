@@ -2,7 +2,8 @@ from typing import List, Optional, Tuple, Union
 
 from vllm.config import ParallelConfig
 from vllm.logger import init_logger
-from vllm.sequence import ExecuteModelRequest, IntermediateTensors
+from vllm.sequence import (ExecuteModelRequest, IntermediateTensors,
+                           SamplerOutput)
 from vllm.utils import get_ip, is_hip, is_xpu
 from vllm.worker.worker_base import WorkerWrapperBase
 
@@ -32,11 +33,18 @@ try:
             return node_id, gpu_ids
 
         def execute_model_spmd(
-            self, req_or_tuple: Union[ExecuteModelRequest,
-                                      Tuple[ExecuteModelRequest,
-                                            IntermediateTensors]]):
-            """Used only when SPMD worker and compiled DAG are both
-            enabled."""
+            self, req_and_tensor: Tuple[ExecuteModelRequest,
+                                        Optional[IntermediateTensors]]
+        ) -> Union[Optional[List[SamplerOutput]], Tuple[ExecuteModelRequest,
+                                                        IntermediateTensors]]:
+            """
+            Execute the model in SPMD mode. Used only when SPMD worker and
+            compiled DAG are both enabled.
+
+            Args:
+                req_and_tensor: A tuple of the execute model request and
+                    intermediate tensors.
+            """
             # TODO(swang): This is needed right now because Ray aDAG executes
             # on a background thread, so we need to reset torch's current
             # device.
@@ -45,12 +53,8 @@ try:
                 torch.cuda.set_device(self.worker.device)
                 self.compiled_dag_cuda_device_set = True
 
-            if isinstance(req_or_tuple, tuple):
-                execute_model_req, intermediate_tensors = req_or_tuple
-            else:
-                execute_model_req = req_or_tuple
-                intermediate_tensors = None
-
+            assert isinstance(req_and_tensor, tuple)
+            execute_model_req, intermediate_tensors = req_and_tensor
             output = self.worker._execute_model_spmd(execute_model_req,
                                                      intermediate_tensors)
             if isinstance(output, IntermediateTensors):
