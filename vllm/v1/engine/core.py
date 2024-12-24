@@ -1,3 +1,4 @@
+import asyncio
 import pickle
 import queue
 import signal
@@ -146,6 +147,7 @@ class EngineCoreProc(EngineCore):
         ready_pipe: Connection,
         vllm_config: VllmConfig,
         executor_class: Type[Executor],
+        async_engine_core: bool,
         log_stats: bool = False,
     ):
         super().__init__(vllm_config, executor_class)
@@ -159,6 +161,21 @@ class EngineCoreProc(EngineCore):
         # Threads handle Socket <-> Queues and core_busy_loop uses Queue.
         self.input_queue: queue.Queue[EngineCoreRequestUnion] = queue.Queue()
         self.output_queue: queue.Queue[EngineCoreOutputs] = queue.Queue()
+        print("async_engine_core", async_engine_core)
+        self.async_engine_core = async_engine_core
+        if async_engine_core:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            self.loop.set_debug(True)
+            self.input_queue: asyncio.Queue[
+                EngineCoreRequestUnion] = asyncio.Queue()
+            self.microbatch_queue = asyncio.Queue(
+                vllm_config.parallel_config.pipeline_parallel_size)
+            self.microbatch_queue_size = vllm_config.parallel_config.pipeline_parallel_size
+        else:
+            self.input_queue: queue.Queue[
+                EngineCoreRequestUnion] = queue.Queue()
+        self.output_queue: queue.Queue[List[EngineCoreOutput]] = queue.Queue()
         threading.Thread(target=self.process_input_socket,
                          args=(input_path, ),
                          daemon=True).start()
@@ -168,6 +185,70 @@ class EngineCoreProc(EngineCore):
 
         # Send Readiness signal to EngineClient.
         ready_pipe.send({"status": "READY"})
+        with make_zmq_socket(ready_path, zmq.constants.PUSH) as ready_socket:
+            ready_socket.send_string(EngineCoreProc.READY_STR)
+
+    @staticmethod
+    def wait_for_startup(
+        proc: BaseProcess,
+        ready_path: str,
+    ) -> None:
+        """Wait until the EngineCore is ready."""
+
+        try:
+            sync_ctx = zmq.Context()  # type: ignore[attr-defined]
+            socket = sync_ctx.socket(zmq.constants.PULL)
+            socket.connect(ready_path)
+
+            # Wait for EngineCore to send EngineCoreProc.READY_STR.
+            while socket.poll(timeout=POLLING_TIMEOUT_MS) == 0:
+                logger.debug("Waiting for EngineCoreProc to startup.")
+
+                if not proc.is_alive():
+                    raise RuntimeError("EngineCoreProc failed to start.")
+
+            message = socket.recv_string()
+            assert message == EngineCoreProc.READY_STR
+
+        except BaseException as e:
+            logger.exception(e)
+            raise e
+
+        finally:
+            sync_ctx.destroy(linger=0)
+
+    @staticmethod
+    def make_engine_core_process(
+        vllm_config: VllmConfig,
+        executor_class: Type[Executor],
+        usage_context: UsageContext,
+        input_path: str,
+        output_path: str,
+        ready_path: str,
+    ) -> EngineCoreProcHandle:
+        context = get_mp_context()
+
+        async_engine_core = True if vllm_config.parallel_config.distributed_executor_backend == "ray" else False
+        process_kwargs = {
+            "input_path": input_path,
+            "output_path": output_path,
+            "ready_path": ready_path,
+            "vllm_config": vllm_config,
+            "executor_class": executor_class,
+            "usage_context": usage_context,
+            "async_engine_core": async_engine_core
+        }
+        # Run EngineCore busy loop in background process.
+        proc = context.Process(target=EngineCoreProc.run_engine_core,
+                               kwargs=process_kwargs)
+        proc.start()
+
+        # Wait for startup
+        EngineCoreProc.wait_for_startup(proc, ready_path)
+        return EngineCoreProcHandle(proc=proc,
+                                    ready_path=ready_path,
+                                    input_path=input_path,
+                                    output_path=output_path)
 
     @staticmethod
     def run_engine_core(*args, **kwargs):
@@ -195,7 +276,10 @@ class EngineCoreProc(EngineCore):
         engine_core = None
         try:
             engine_core = EngineCoreProc(*args, **kwargs)
-            engine_core.run_busy_loop()
+            if kwargs["async_engine_core"]:
+                engine_core.loop.run_until_complete(engine_core.engine_main())
+            else:
+                engine_core.run_busy_loop()
 
         except SystemExit:
             logger.debug("EngineCore interrupted.")
@@ -208,6 +292,67 @@ class EngineCoreProc(EngineCore):
         finally:
             if engine_core is not None:
                 engine_core.shutdown()
+
+    async def engine_main(self):
+        print("engine_main")
+        producer = asyncio.create_task(self.submit_microbatch())
+        consumer = asyncio.create_task(self.finish_microbatch())
+        await asyncio.gather(producer, consumer)
+
+    async def can_schedule(self):
+        while True:
+            if self.scheduler.has_schedulable_requests():
+                logger.info("can_schedule: has_schedulable_requests")
+                return True
+            if not self.input_queue.empty():
+                logger.info("can_schedule: input_queue not empty")
+                return True
+            logger.info("can_schedule: waiting")
+            await asyncio.sleep(0.1)
+
+    async def can_submit(self):
+        while True:
+            if self.microbatch_queue.qsize() < self.microbatch_queue_size:
+                logger.info(
+                    "can_submit: microbatch_queue.size() < microbatch_queue_size"
+                )
+                return True
+            logger.info("can_submit: waiting")
+            await asyncio.sleep(0.1)
+
+    async def submit_microbatch(self):
+        print("submit_microbatch")
+        while True:
+            await asyncio.gather(self.can_schedule(), self.can_submit())
+            logger.info("submit_microbatch: can continue")
+            while not self.input_queue.empty():
+                req = self.input_queue.get_nowait()
+                logger.info("submit_microbatch: got req")
+                self._handle_client_request(req)
+            logger.info("submit_microbatch: scheduler.schedule")
+            scheduler_output = self.scheduler.schedule()
+            logger.info(
+                "submit_microbatch: scheduler.schedule: got scheduler_output")
+            microbatch_future = await self.model_executor.submit_microbatch(
+                scheduler_output)
+            logger.info(
+                "submit_microbatch: scheduler.schedule: got microbatch_future")
+            await self.microbatch_queue.put(
+                (microbatch_future, scheduler_output))
+
+    async def finish_microbatch(self):
+        logger.info("finish_microbatch")
+        while True:
+            microbatch_future, scheduler_output = await self.microbatch_queue.get(
+            )
+            logger.info(
+                "finish_microbatch: got microbatch_future, scheduler_output")
+            model_output = await microbatch_future
+            engine_core_outputs = self.scheduler.update_from_output(
+                scheduler_output, model_output)
+            logger.info("finish_microbatch: scheduler.update_from_output")
+            self.output_queue.put_nowait(engine_core_outputs)
+            logger.info("finish_microbatch: put engine_core_outputs")
 
     def run_busy_loop(self):
         """Core busy loop of the EngineCore."""
@@ -276,8 +421,14 @@ class EngineCoreProc(EngineCore):
                 else:
                     raise ValueError(f"Unknown RequestType: {request_type}")
 
+                print("process_input_socket: got request")
                 # Push to input queue for core busy loop.
-                self.input_queue.put_nowait(request)
+                if self.async_engine_core:
+                    self.loop.call_soon_threadsafe(self.input_queue.put_nowait,
+                                                   request)
+                else:
+                    self.input_queue.put_nowait(request)
+                print("process_input_socket: put request")
 
     def process_output_socket(self, output_path: str):
         """Output socket IO thread."""

@@ -10,6 +10,7 @@ import torch.nn as nn
 from vllm.attention.backends.abstract import AttentionType
 from vllm.attention.layer import Attention
 from vllm.config import CompilationLevel, VllmConfig
+from vllm.distributed import get_pp_group
 from vllm.distributed.parallel_state import graph_capture
 from vllm.forward_context import set_forward_context
 from vllm.inputs import INPUT_REGISTRY
@@ -693,10 +694,9 @@ class GPUModelRunner:
         return self.model
 
     @torch.inference_mode()
-    def execute_model(
-        self,
-        scheduler_output: "SchedulerOutput",
-    ) -> ModelRunnerOutput:
+    def execute_model(self,
+                      scheduler_output: "SchedulerOutput",
+                      intermediate_tensors=None) -> ModelRunnerOutput:
         self._update_states(scheduler_output)
 
         if self.is_multimodal_model:
@@ -753,8 +753,11 @@ class GPUModelRunner:
                 positions=positions,
                 kv_caches=self.kv_caches,
                 attn_metadata=None,
+                intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds,
             )
+        if not get_pp_group().is_last_rank:
+            return hidden_states
         hidden_states = hidden_states[:num_scheduled_tokens]
         hidden_states = hidden_states[logits_indices]
         logits = self.model.compute_logits(hidden_states, None)
@@ -836,6 +839,23 @@ class GPUModelRunner:
         else:
             input_ids = self.input_ids[:num_tokens]
             inputs_embeds = None
+
+        max_num_batched_tokens = self.scheduler_config.max_num_batched_tokens
+        max_num_seqs = self.scheduler_config.max_num_seqs
+        # TODO: adjust batch size for multimodal models
+        batch_size = 0
+        for group_id in range(max_num_seqs):
+            seq_len = (max_num_batched_tokens // max_num_seqs +
+                       (group_id < max_num_batched_tokens % max_num_seqs))
+            batch_size += seq_len
+
+        intermediate_tensors = None
+        if not get_pp_group().is_first_rank:
+            intermediate_tensors = self.model.make_empty_intermediate_tensors(
+                batch_size=num_tokens,
+                dtype=self.model_config.dtype,
+                device=self.device)
+
         with set_forward_context(None, self.vllm_config):
             positions = self.mrope_positions[:, :num_tokens] \
                 if self.model_config.uses_mrope \
@@ -845,6 +865,7 @@ class GPUModelRunner:
                 positions=positions,
                 kv_caches=kv_caches,
                 attn_metadata=None,
+                intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds,
             )
         return hidden_states
@@ -957,6 +978,8 @@ class GPUModelRunner:
         # Trigger compilation for general shape.
         hidden_states = self._dummy_run(self.model, self.max_num_tokens,
                                         dummy_kv_caches)
+        if not get_pp_group().is_last_rank:
+            return hidden_states
         logits = self.model.compute_logits(hidden_states, None)
         logits = logits[:self.max_num_tokens]
         # TODO(woosuk): Consider the memory usage of the sampler.

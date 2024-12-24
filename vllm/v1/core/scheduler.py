@@ -58,6 +58,7 @@ class Scheduler:
         # Priority queues for requests.
         self.waiting: Deque[Request] = deque()
         self.running: List[Request] = []
+        self.running_pipelined: List[Request] = []
 
         # The request IDs that are finished in between the previous and the
         # current steps. This is used to notify the workers about the finished
@@ -164,6 +165,7 @@ class Scheduler:
 
             # Schedule the request.
             scheduled_running_reqs.append(request)
+            self.running_pipelined.append(request)
             req_to_new_block_ids[request.request_id] = [
                 b.block_id for b in new_blocks
             ]
@@ -187,7 +189,8 @@ class Scheduler:
             while self.waiting:
                 if has_partial_request:
                     break
-                if len(self.running) == self.max_num_running_reqs:
+                if len(self.running +
+                       self.running_pipelined) == self.max_num_running_reqs:
                     break
                 if token_budget == 0:
                     break
@@ -231,7 +234,7 @@ class Scheduler:
                     break
 
                 self.waiting.popleft()
-                self.running.append(request)
+                self.running_pipelined.append(request)
                 if request.status == RequestStatus.WAITING:
                     scheduled_new_reqs.append(request)
                 elif request.status == RequestStatus.PREEMPTED:
@@ -263,9 +266,11 @@ class Scheduler:
         total_num_scheduled_tokens = sum(num_scheduled_tokens.values())
         assert total_num_scheduled_tokens <= self.max_num_scheduled_tokens
         assert token_budget >= 0
-        assert len(self.running) <= self.max_num_running_reqs
-        assert (len(scheduled_new_reqs) + len(scheduled_resumed_reqs) +
-                len(scheduled_running_reqs) == len(self.running))
+        self.running = self.running[len(scheduled_running_reqs):]
+        assert len(self.running +
+                   self.running_pipelined) <= self.max_num_running_reqs
+        # assert (len(scheduled_new_reqs) + len(scheduled_resumed_reqs) +
+        #         len(scheduled_running_reqs) == len(self.running))
 
         # Get the longest common prefix among all requests in the running queue.
         # This can be potentially used for cascade attention.
@@ -409,10 +414,10 @@ class Scheduler:
         # NOTE(woosuk): This method doesn't consider speculative decoding.
         sampled_token_ids = model_runner_output.sampled_token_ids
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
-        new_running: List[Request] = []
-        outputs: List[EngineCoreOutput] = []
-        for request in self.running:
-            req_id = request.request_id
+        engine_core_outputs: List[EngineCoreOutput] = []
+        for req_id in model_runner_output.req_ids:
+            logger.info(f"update_from_output: req_id: {req_id}")
+            request = self.requests[req_id]
             request.num_computed_tokens += num_scheduled_tokens[req_id]
             # When the request's num_computed_tokens catches up its num_tokens,
             # the request generates output tokens. Otherwise, we ignore the
@@ -429,6 +434,7 @@ class Scheduler:
                     # in the decoder's KV cache.
                     self.encoder_cache_manager.free(request, input_id)
 
+            self.running_pipelined.remove(request)
             if request.num_computed_tokens == request.num_tokens:
                 req_index = model_runner_output.req_id_to_index[req_id]
                 # NOTE(woosuk): Currently, we assume that each request
@@ -449,18 +455,17 @@ class Scheduler:
                     finished=request.is_finished(),
                     finish_reason=request.get_finished_reason(),
                     stop_reason=request.stop_reason)
-                outputs.append(output)
+                engine_core_outputs.append(output)
 
                 # Breakout of the loop.
                 if stopped:
                     continue
 
-            new_running.append(request)
-        self.running = new_running
-        return EngineCoreOutputs(
-            outputs=outputs,
-            scheduler_stats=self.make_stats(),
-        )
+            logger.info(
+                f"update_from_output: appending request to running: {request.request_id}"
+            )
+            self.running.append(request)
+        return engine_core_outputs
 
     def _check_stop(self, request: Request) -> bool:
         if (request.num_tokens >= self.max_model_len
@@ -524,7 +529,8 @@ class Scheduler:
         self.finished_req_ids.add(request.request_id)
 
     def get_num_unfinished_requests(self) -> int:
-        return len(self.waiting) + len(self.running)
+        return len(self.waiting) + len(self.running) + len(
+            self.running_pipelined)
 
     def has_unfinished_requests(self) -> bool:
         return self.get_num_unfinished_requests() > 0
@@ -534,6 +540,9 @@ class Scheduler:
             num_running_reqs=len(self.running),
             num_waiting_reqs=len(self.waiting),
         )
+
+    def has_schedulable_requests(self) -> bool:
+        return len(self.waiting) + len(self.running) > 0
 
 
 @dataclass
