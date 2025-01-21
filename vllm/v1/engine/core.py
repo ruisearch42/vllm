@@ -19,7 +19,7 @@ from vllm.transformers_utils.config import (
 from vllm.utils import get_exception_traceback, zmq_socket_ctx
 from vllm.v1.core.kv_cache_utils import get_kv_cache_config
 from vllm.v1.core.scheduler import Scheduler
-from vllm.v1.engine import (EngineCoreOutputs, EngineCoreProfile,
+from vllm.v1.engine import (EngineCoreOutput, EngineCoreOutputs, EngineCoreProfile,
                             EngineCoreRequest, EngineCoreRequestType,
                             EngineCoreRequestUnion)
 from vllm.v1.engine.mm_input_mapper import MMInputMapperServer
@@ -185,70 +185,6 @@ class EngineCoreProc(EngineCore):
 
         # Send Readiness signal to EngineClient.
         ready_pipe.send({"status": "READY"})
-        with make_zmq_socket(ready_path, zmq.constants.PUSH) as ready_socket:
-            ready_socket.send_string(EngineCoreProc.READY_STR)
-
-    @staticmethod
-    def wait_for_startup(
-        proc: BaseProcess,
-        ready_path: str,
-    ) -> None:
-        """Wait until the EngineCore is ready."""
-
-        try:
-            sync_ctx = zmq.Context()  # type: ignore[attr-defined]
-            socket = sync_ctx.socket(zmq.constants.PULL)
-            socket.connect(ready_path)
-
-            # Wait for EngineCore to send EngineCoreProc.READY_STR.
-            while socket.poll(timeout=POLLING_TIMEOUT_MS) == 0:
-                logger.debug("Waiting for EngineCoreProc to startup.")
-
-                if not proc.is_alive():
-                    raise RuntimeError("EngineCoreProc failed to start.")
-
-            message = socket.recv_string()
-            assert message == EngineCoreProc.READY_STR
-
-        except BaseException as e:
-            logger.exception(e)
-            raise e
-
-        finally:
-            sync_ctx.destroy(linger=0)
-
-    @staticmethod
-    def make_engine_core_process(
-        vllm_config: VllmConfig,
-        executor_class: Type[Executor],
-        usage_context: UsageContext,
-        input_path: str,
-        output_path: str,
-        ready_path: str,
-    ) -> EngineCoreProcHandle:
-        context = get_mp_context()
-
-        async_engine_core = True if vllm_config.parallel_config.distributed_executor_backend == "ray" else False
-        process_kwargs = {
-            "input_path": input_path,
-            "output_path": output_path,
-            "ready_path": ready_path,
-            "vllm_config": vllm_config,
-            "executor_class": executor_class,
-            "usage_context": usage_context,
-            "async_engine_core": async_engine_core
-        }
-        # Run EngineCore busy loop in background process.
-        proc = context.Process(target=EngineCoreProc.run_engine_core,
-                               kwargs=process_kwargs)
-        proc.start()
-
-        # Wait for startup
-        EngineCoreProc.wait_for_startup(proc, ready_path)
-        return EngineCoreProcHandle(proc=proc,
-                                    ready_path=ready_path,
-                                    input_path=input_path,
-                                    output_path=output_path)
 
     @staticmethod
     def run_engine_core(*args, **kwargs):

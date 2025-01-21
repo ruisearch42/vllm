@@ -170,6 +170,8 @@ class MPClient(EngineCoreClient):
                                              zmq.constants.PULL)
         self.input_socket = make_zmq_socket(self.ctx, input_path,
                                             zmq.constants.PUSH)
+        
+        async_engine_core = True if vllm_config.parallel_config.distributed_executor_backend == "ray" else False
 
         # Start EngineCore in background process.
         self.proc_handle = BackgroundProcHandle(
@@ -181,6 +183,7 @@ class MPClient(EngineCoreClient):
                 "vllm_config": vllm_config,
                 "executor_class": executor_class,
                 "log_stats": log_stats,
+                "async_engine_core": async_engine_core,
             })
 
     def shutdown(self):
