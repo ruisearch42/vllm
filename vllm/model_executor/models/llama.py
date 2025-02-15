@@ -363,12 +363,44 @@ class LlamaModel(nn.Module):
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
 
+        print("start_layer", self.start_layer)
+        print("end_layer", self.end_layer)
+        global count
+        count = 0
         for i in range(self.start_layer, self.end_layer):
+            if i == 8:
+                print("before layer 8 kv_cache",
+                      kv_caches[i - self.start_layer].shape)
+                print("before layer 8 hidden_states", hidden_states)
+                print("before layer 8 residual", residual)
             layer = self.layers[i]
+            curr_kv_cache = kv_caches[i - self.start_layer]
+
+            # if (self.start_layer == 0 and self.end_layer == 16):
+            #     print(f"saving kv cache of shape {curr_kv_cache.shape}")
+            #     # Save current KV cache to file
+            #     np.save(f"t{count}_kv_cache_layer_{i}.npy", curr_kv_cache.detach().cpu().half().numpy())
+            # else:
+            #     # Load and verify
+            #     loaded_kv_cache = np.load(f"t{count}_kv_cache_layer_{i}.npy")
+            #     curr_kv_cache_np = curr_kv_cache.detach().cpu().half().numpy()
+            #     if curr_kv_cache_np.shape == loaded_kv_cache.shape:
+            #         print("shape match")
+            #         if not np.allclose(curr_kv_cache_np, loaded_kv_cache):
+            #             print(f"KV cache verification failed for layer {i}")
+            #         else:
+            #             print(f"KV cache verification passed for layer {i}")
+            #     else:
+            #         print(f"shape mismatch: {curr_kv_cache_np.shape} != {loaded_kv_cache.shape}")
+
             hidden_states, residual = layer(positions, hidden_states,
                                             kv_caches[i - self.start_layer],
                                             attn_metadata, residual)
+            if i == 7:
+                print("after layer 7 hidden_states", hidden_states)
+                print("after layer 7 residual", residual)
 
+        count += 1
         if not get_pp_group().is_last_rank:
             return IntermediateTensors({
                 "hidden_states": hidden_states,

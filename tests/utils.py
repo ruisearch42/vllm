@@ -534,6 +534,8 @@ def compare_all_settings(model: str,
                             f"cosine_similarity={sim}\n")
                         del ref_result["embedding"]
                         del compare_result["embedding"]
+                    print("ref_result", ref_result)
+                    print("compare_result", compare_result)
                     assert ref_result == compare_result, (
                         f"Results for {model=} are not the same.\n"
                         f"{ref_args=} {ref_envs=}\n"

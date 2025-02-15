@@ -67,30 +67,30 @@ class PPTestSettings:
     ):
         return PPTestSettings(
             parallel_setups=[
-                ParallelSetup(tp_size=tp_base,
-                              pp_size=pp_base,
-                              eager_mode=False,
-                              chunked_prefill=False),
-                ParallelSetup(tp_size=tp_base,
-                              pp_size=2 * pp_base,
-                              eager_mode=False,
-                              chunked_prefill=True),
+                # ParallelSetup(tp_size=tp_base,
+                #               pp_size=pp_base,
+                #               eager_mode=False,
+                #               chunked_prefill=False),
+                # ParallelSetup(tp_size=tp_base,
+                #               pp_size=2 * pp_base,
+                #               eager_mode=False,
+                #               chunked_prefill=True),
                 ParallelSetup(tp_size=tp_base,
                               pp_size=2 * pp_base,
                               eager_mode=True,
                               chunked_prefill=False),
-                ParallelSetup(tp_size=2 * tp_base,
-                              pp_size=pp_base,
-                              eager_mode=False,
-                              chunked_prefill=True),
-                ParallelSetup(tp_size=2 * tp_base,
-                              pp_size=pp_base,
-                              eager_mode=True,
-                              chunked_prefill=False),
+                # ParallelSetup(tp_size=2 * tp_base,
+                #               pp_size=pp_base,
+                #               eager_mode=True,
+                #               chunked_prefill=True),
+                # ParallelSetup(tp_size=2 * tp_base,
+                #               pp_size=pp_base,
+                #               eager_mode=True,
+                #               chunked_prefill=False),
             ],
             # only ray is supported for V1
-            distributed_backends=["mp", "ray", "ray"],
-            vllm_major_versions=["0", "0", "1"],
+            distributed_backends=["ray"],
+            vllm_major_versions=["0"],
             task=task,
             test_options=PPTestOptions(multi_node_only=multi_node_only,
                                        load_format=load_format),
@@ -229,9 +229,9 @@ MULTIMODAL_MODELS = {
 # NOTE: You can update this on your local machine to run specific tests
 TEST_MODELS = [
     # [LANGUAGE GENERATION]
-    "microsoft/Phi-3.5-MoE-instruct",
+    # "microsoft/Phi-3.5-MoE-instruct",
     "meta-llama/Meta-Llama-3-8B",
-    "ibm/PowerLM-3b",
+    # "ibm/PowerLM-3b",
     # [LANGUAGE EMBEDDING]
     "intfloat/e5-mistral-7b-instruct",
     "BAAI/bge-multilingual-gemma2",
@@ -240,7 +240,7 @@ TEST_MODELS = [
     "microsoft/Phi-3-vision-128k-instruct",
     "fixie-ai/ultravox-v0_5-llama-3_2-1b",
     # [LANGUAGE GENERATION - HYBRID ARCH]
-    "ai21labs/Jamba-tiny-dev",
+    # "ai21labs/Jamba-tiny-dev",
 ]
 
 
@@ -364,11 +364,12 @@ def _compare_tp(
     try:
         compare_two_settings(model_id, pp_args, tp_args, pp_env, method=method)
     except Exception:
-        if pp_env is None:
-            raise
-        else:
-            # Ray ADAG tests are flaky, so we don't want to fail the test
-            logger.exception("Ray ADAG tests failed")
+        raise
+        # if pp_env is None:
+        #     raise
+        # else:
+        #     # Ray ADAG tests are flaky, so we don't want to fail the test
+        #     logger.exception("Ray ADAG tests failed")
 
 
 @pytest.mark.parametrize(

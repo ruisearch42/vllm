@@ -112,7 +112,7 @@ try:
                 torch.cuda.set_device(self.worker.device)
                 self.compiled_dag_cuda_device_set = True
 
-        def execute_model(
+        def execute_model_v1(
             self,
             scheduler_output: "SchedulerOutput",
         ) -> "ModelRunnerOutput":
@@ -123,7 +123,8 @@ try:
             else:
                 scheduler_output, intermediate_tensors = scheduler_output, None
             output = self.worker.model_runner.execute_model(
-                scheduler_output, intermediate_tensors)
+                scheduler_output=scheduler_output,
+                intermediate_tensors=intermediate_tensors)
             if isinstance(output, IntermediateTensors):
                 output = scheduler_output, output
             return output

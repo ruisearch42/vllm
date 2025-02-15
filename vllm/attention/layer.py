@@ -179,6 +179,8 @@ class Attention(nn.Module):
                 forward_context: ForwardContext = get_forward_context()
                 ctx_attn_metadata = forward_context.attn_metadata
                 self_kv_cache = self.kv_cache[forward_context.virtual_engine]
+                print("use_direct_call virtual_engine",
+                      forward_context.virtual_engine)
                 self.impl.forward(self,
                                   query,
                                   key,
@@ -195,6 +197,8 @@ class Attention(nn.Module):
                 forward_context = get_forward_context()
                 ctx_attn_metadata = forward_context.attn_metadata
                 self_kv_cache = self.kv_cache[forward_context.virtual_engine]
+                print("use_direct_call2 virtual_engine",
+                      forward_context.virtual_engine)
                 return self.impl.forward(self, query, key, value,
                                          self_kv_cache, ctx_attn_metadata)
             else:
@@ -335,6 +339,7 @@ def unified_attention_with_output(
     forward_context: ForwardContext = get_forward_context()
     attn_metadata = forward_context.attn_metadata
     self = forward_context.attn_layers[layer_name]
+    print("virtual_engine", forward_context.virtual_engine)
     kv_cache = self.kv_cache[forward_context.virtual_engine]
     self.impl.forward(self,
                       query,

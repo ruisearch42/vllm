@@ -826,6 +826,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         else:
             positions = self.positions[:num_input_tokens]
 
+        print("input_ids", input_ids)
         # Run the decoder.
         # Use persistent buffers for CUDA graphs.
         with set_forward_context(attn_metadata, self.vllm_config):
@@ -837,8 +838,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds,
             )
+        print("type of hidden_states", type(hidden_states))
         if not get_pp_group().is_last_rank:
+            print("shape of hidden_states.hidden_states",
+                  hidden_states["hidden_states"].shape)
+            print("shape of hidden_states.residual",
+                  hidden_states["residual"].shape)
+            print()
             return hidden_states
+        print("shape of hidden_states", hidden_states.shape)
         hidden_states = hidden_states[:num_scheduled_tokens]
         sample_hidden_states = hidden_states[logits_indices]
         logits = self.model.compute_logits(sample_hidden_states, None)
@@ -884,6 +892,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # NOTE: GPU -> CPU Sync happens here.
         # Move as many CPU operations as possible before this sync point.
         sampled_token_ids = sampler_output.sampled_token_ids.tolist()
+        print("sampled_token_ids", sampled_token_ids)
         logprobs_tensors = sampler_output.logprobs_tensors
         logprobs_lists = logprobs_tensors.tolists() \
             if logprobs_tensors is not None else None

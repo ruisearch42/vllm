@@ -414,7 +414,8 @@ class RayDistributedExecutor(DistributedExecutorBase):
             serialized_data = execute_model_req
         else:
             serialized_data = self.input_encoder.encode(execute_model_req)
-        outputs = ray.get(self.forward_dag.execute(serialized_data))
+        outputs = ray.get(self.forward_dag.execute(serialized_data),
+                          timeout=1000000000)
         if self.use_v1:
             output = outputs[0]
         else:
@@ -537,7 +538,7 @@ class RayDistributedExecutor(DistributedExecutorBase):
                 # and the TP group executes in SPMD fashion.
                 if self.use_v1:
                     outputs = [
-                        worker.execute_model.
+                        worker.execute_model_v1.
                         bind(  # type: ignore[attr-defined]
                             outputs[i]) for i, worker in enumerate(tp_group)
                     ]
@@ -565,6 +566,7 @@ class RayDistributedExecutor(DistributedExecutorBase):
             forward_dag = MultiOutputNode(outputs)
 
         return forward_dag.experimental_compile(
+            _execution_timeout=-1,
             enable_asyncio=enable_asyncio,
             _overlap_gpu_communication=envs.
             VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM)
