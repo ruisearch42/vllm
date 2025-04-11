@@ -60,6 +60,7 @@ class DeepSeekMultiTokenPredictorLayer(nn.Module):
         self.eh_proj = nn.Linear(config.hidden_size * 2,
                                  config.hidden_size,
                                  bias=False)
+        # Why is this not used?
         self.shared_head = SharedHead(config=config, quant_config=quant_config)
         self.mtp_block = DeepseekV2DecoderLayer(config, prefix, model_config,
                                                 cache_config, quant_config)

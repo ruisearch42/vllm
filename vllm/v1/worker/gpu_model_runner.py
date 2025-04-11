@@ -38,6 +38,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.rejection_sampler import RejectionSampler
 from vllm.v1.spec_decode.eagle import EagleProposer
 from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
+from vllm.v1.spec_decode.mtp_proposer import MtpProposer
 from vllm.v1.spec_decode.ngram_proposer import NgramProposer
 from vllm.v1.spec_decode.utils import is_spec_decode_supported
 from vllm.v1.utils import bind_kv_cache
@@ -167,6 +168,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 elif self.speculative_config.method == "eagle":
                     self.drafter = EagleProposer(self.vllm_config,
                                                  self.device)  # type: ignore
+                elif self.speculative_config.method == "mtp":
+                    self.drafter = MtpProposer(self.vllm_config,
+                                               self.device)  # type: ignore
                 else:
                     raise ValueError("Unknown speculative decoding method: "
                                      f"{self.speculative_config.method}")
@@ -1149,6 +1153,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         sampled_token_ids = sampler_output.sampled_token_ids
         max_gen_len = sampled_token_ids.shape[-1]
         if max_gen_len == 1:
+            # GPU tensor to CPU list? sync point?
             # No spec decode tokens.
             valid_sampled_token_ids = sampled_token_ids.tolist()
         else:
@@ -1174,6 +1179,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             next_token_ids: list[int] = []
             for i, token_ids in enumerate(valid_sampled_token_ids):
                 if token_ids:
+                    # Only need the last token ID
                     # Common case.
                     next_token_id = token_ids[-1]
                 else:
@@ -1211,6 +1217,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     dtype=torch.int32,
                     device=self.device,
                 )
+                #TODO: DeepSeek attention metadata is different from
+                # FlashAttentionMetadata (assumed for EAGLE); V1
+                # attention metadata is also not the same as V0.
                 cu_num_tokens, token_indices = self.drafter.prepare_inputs(
                     attn_metadata.query_start_loc,
                     num_rejected_tokens,
