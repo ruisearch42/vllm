@@ -1173,8 +1173,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             assert isinstance(self.drafter, NgramProposer)
             spec_token_ids = self.generate_draft_token_ids(
                 valid_sampled_token_ids, sampling_metadata)
-        elif self.speculative_config.method == "eagle":
-            assert isinstance(self.drafter, EagleProposer)
+        elif (self.speculative_config.method == "eagle" or
+              self.speculative_config.draft_model_config.hf_config.model_type \
+                == "deepseek_mtp"):
+            assert isinstance(self.drafter, EagleProposer) or \
+                isinstance(self.drafter, MtpProposer)
             # TODO(woosuk): Refactor the loop.
             next_token_ids: list[int] = []
             for i, token_ids in enumerate(valid_sampled_token_ids):
