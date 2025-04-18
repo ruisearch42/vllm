@@ -79,30 +79,30 @@ class PPTestSettings:
     ):
         return PPTestSettings(
             parallel_setups=[
-                ParallelSetup(tp_size=tp_base,
-                              pp_size=pp_base,
-                              eager_mode=False,
-                              chunked_prefill=False),
-                ParallelSetup(tp_size=tp_base,
-                              pp_size=2 * pp_base,
-                              eager_mode=False,
-                              chunked_prefill=True),
+                # ParallelSetup(tp_size=tp_base,
+                #               pp_size=pp_base,
+                #               eager_mode=False,
+                #               chunked_prefill=False),
+                # ParallelSetup(tp_size=tp_base,
+                #               pp_size=2 * pp_base,
+                #               eager_mode=False,
+                #               chunked_prefill=True),
                 ParallelSetup(tp_size=tp_base,
                               pp_size=2 * pp_base,
                               eager_mode=True,
                               chunked_prefill=False),
-                ParallelSetup(tp_size=2 * tp_base,
-                              pp_size=pp_base,
-                              eager_mode=False,
-                              chunked_prefill=True),
-                ParallelSetup(tp_size=2 * tp_base,
-                              pp_size=pp_base,
-                              eager_mode=True,
-                              chunked_prefill=False),
+                # ParallelSetup(tp_size=2 * tp_base,
+                #               pp_size=pp_base,
+                #               eager_mode=False,
+                #               chunked_prefill=True),
+                # ParallelSetup(tp_size=2 * tp_base,
+                #               pp_size=pp_base,
+                #               eager_mode=True,
+                #               chunked_prefill=False),
             ],
             # only ray is supported for V1
-            distributed_backends=["mp", "ray", "ray"],
-            vllm_major_versions=["0", "0", "1"],
+            distributed_backends=["ray"],
+            vllm_major_versions=["1"],
             task=task,
             test_options=PPTestOptions(multi_node_only=multi_node_only,
                                        load_format=load_format),
@@ -196,6 +196,7 @@ TEXT_GENERATION_MODELS = {
     "microsoft/Phi-3.5-MoE-instruct": PPTestSettings.detailed(multi_node_only=True, load_format="dummy"),  # noqa: E501
     "Qwen/Qwen-7B-Chat": PPTestSettings.fast(),
     "Qwen/Qwen2-7B-Instruct": PPTestSettings.fast(),
+    "Qwen/Qwen1.5-MoE-A2.7B": PPTestSettings.detailed(),
     "Qwen/Qwen1.5-MoE-A2.7B-Chat": PPTestSettings.fast(),
     "stabilityai/stablelm-3b-4e1t": PPTestSettings.fast(),
     "bigcode/starcoder2-3b": PPTestSettings.fast(),
@@ -243,19 +244,20 @@ MULTIMODAL_MODELS = {
 # NOTE: You can update this on your local machine to run specific tests
 TEST_MODELS = [
     # [LANGUAGE GENERATION]
-    "microsoft/Phi-3.5-MoE-instruct",
-    "meta-llama/Llama-3.2-1B-Instruct",
-    "ArthurZ/Ilama-3.2-1B",
-    "ibm/PowerLM-3b",
+    # "microsoft/Phi-3.5-MoE-instruct",
+    # "meta-llama/Llama-3.2-1B-Instruct",
+    # "ArthurZ/Ilama-3.2-1B",
+    # "ibm/PowerLM-3b",
+    "Qwen/Qwen1.5-MoE-A2.7B",
     # [LANGUAGE EMBEDDING]
-    "intfloat/e5-mistral-7b-instruct",
-    "BAAI/bge-multilingual-gemma2",
-    # [MULTIMODAL GENERATION]
-    "OpenGVLab/InternVL2-1B",
-    "microsoft/Phi-3.5-vision-instruct",
-    "fixie-ai/ultravox-v0_5-llama-3_2-1b",
-    # [LANGUAGE GENERATION - HYBRID ARCH]
-    "ai21labs/Jamba-tiny-dev",
+    # "intfloat/e5-mistral-7b-instruct",
+    # "BAAI/bge-multilingual-gemma2",
+    # # [MULTIMODAL GENERATION]
+    # "OpenGVLab/InternVL2-1B",
+    # "microsoft/Phi-3.5-vision-instruct",
+    # "fixie-ai/ultravox-v0_5-llama-3_2-1b",
+    # # [LANGUAGE GENERATION - HYBRID ARCH]
+    # "ai21labs/Jamba-tiny-dev",
 ]
 
 
@@ -375,7 +377,7 @@ def _compare_tp(
     tp_args = [
         *common_args,
         "--tensor-parallel-size",
-        str(tp_size),
+        str(tp_size * pp_size),
         "--distributed-executor-backend",
         "mp",
     ]

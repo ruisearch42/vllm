@@ -210,7 +210,7 @@ _TEXT_GENERATION_EXAMPLE_MODELS = {
                                        trust_remote_code=True),
     "Qwen2ForCausalLM": _HfExamplesInfo("Qwen/Qwen2-7B-Instruct",
                                         extras={"2.5": "Qwen/Qwen2.5-7B-Instruct"}), # noqa: E501
-    "Qwen2MoeForCausalLM": _HfExamplesInfo("Qwen/Qwen1.5-MoE-A2.7B-Chat"),
+    "Qwen2MoeForCausalLM": _HfExamplesInfo("Qwen/Qwen1.5-MoE-A2.7B"),
     "Qwen3ForCausalLM": _HfExamplesInfo(
         "Qwen/Qwen3-8B",
         is_available_online=False,
