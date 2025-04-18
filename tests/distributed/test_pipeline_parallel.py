@@ -183,6 +183,7 @@ TEXT_GENERATION_MODELS = {
     # "mistralai/Mistral-7B-Instruct-v0.1": PPTestSettings.fast(),
     "state-spaces/mamba-130m-hf": PPTestSettings.fast(),
     "mistralai/Mixtral-8x7B-Instruct-v0.1": PPTestSettings.fast(load_format="dummy"),  # noqa: E501
+    "mistralai/Mixtral-8x7B-v0.1": PPTestSettings.detailed(),  # noqa: E501
     "mosaicml/mpt-7b": PPTestSettings.fast(),
     "nvidia/Minitron-8B-Base": PPTestSettings.fast(),
     "allenai/OLMo-1B-hf": PPTestSettings.fast(),
@@ -248,7 +249,8 @@ TEST_MODELS = [
     # "meta-llama/Llama-3.2-1B-Instruct",
     # "ArthurZ/Ilama-3.2-1B",
     # "ibm/PowerLM-3b",
-    "Qwen/Qwen1.5-MoE-A2.7B",
+    #"Qwen/Qwen1.5-MoE-A2.7B",
+    "mistralai/Mixtral-8x7B-v0.1",
     # [LANGUAGE EMBEDDING]
     # "intfloat/e5-mistral-7b-instruct",
     # "BAAI/bge-multilingual-gemma2",
