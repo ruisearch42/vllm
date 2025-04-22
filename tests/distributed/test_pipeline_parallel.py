@@ -249,8 +249,8 @@ TEST_MODELS = [
     # "meta-llama/Llama-3.2-1B-Instruct",
     # "ArthurZ/Ilama-3.2-1B",
     # "ibm/PowerLM-3b",
-    "Qwen/Qwen1.5-MoE-A2.7B",
-    #"mistralai/Mixtral-8x7B-v0.1",
+    #"Qwen/Qwen1.5-MoE-A2.7B",
+    "mistralai/Mixtral-8x7B-v0.1",
     # [LANGUAGE EMBEDDING]
     # "intfloat/e5-mistral-7b-instruct",
     # "BAAI/bge-multilingual-gemma2",
@@ -376,21 +376,12 @@ def _compare_tp(
     # PP tests might involve multiple nodes, and ray might
     #  schedule all workers in a node other than the head node,
     #  which can cause the test to fail.
-    # tp_args = [
-    #     *common_args,
-    #     "--tensor-parallel-size",
-    #     str(tp_size * pp_size),
-    #     "--distributed-executor-backend",
-    #     "mp",
-    # ]
     tp_args = [
         *common_args,
-        "--pipeline-parallel-size",
-        str(int(pp_size / 2)),
         "--tensor-parallel-size",
-        str(tp_size),
+        str(tp_size * pp_size),
         "--distributed-executor-backend",
-        distributed_backend,
+        "mp",
     ]
 
     try:
