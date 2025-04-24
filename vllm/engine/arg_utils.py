@@ -947,8 +947,11 @@ class EngineArgs:
         # * If VLLM_USE_V1=0, we disable V1.
         use_v1 = False
         try_v1 = envs.VLLM_USE_V1 or not envs.is_set("VLLM_USE_V1")
+        logger.info(f"try_v1: {try_v1}")
         if try_v1 and self._is_v1_supported_oracle(model_config):
             use_v1 = True
+        else:
+            logger.info("V1 is not supported for this model. Using V0.")
 
         # If user explicitly set VLLM_USE_V1, sanity check we respect it.
         if envs.is_set("VLLM_USE_V1"):
@@ -956,6 +959,8 @@ class EngineArgs:
         # Otherwise, set the VLLM_USE_V1 variable globally.
         else:
             envs.set_vllm_use_v1(use_v1)
+        
+        logger.info(f"use_v1: {use_v1}")
 
         # Set default arguments for V0 or V1 Engine.
         if use_v1:
@@ -1281,10 +1286,13 @@ class EngineArgs:
                 speculative_model = self.speculative_config.get("model")
                 if speculative_model in ("ngram", "[ngram]"):
                     is_ngram_enabled = True
+            logger.info("Forcing to use V1 for speculative decoding.")
+            return True
             if not (is_ngram_enabled or is_eagle_enabled):
                 # Other speculative decoding methods are not supported yet.
                 _raise_or_fallback(feature_name="Speculative Decoding",
                                    recommend_to_remove=False)
+                logger.info("Speculative Decoding is not supported for this model. Using V0.")
                 return False
 
         # No XFormers so far.
