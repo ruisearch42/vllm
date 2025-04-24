@@ -126,7 +126,7 @@ class MtpProposer:
         sampling_metadata: SamplingMetadata,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         num_tokens = target_token_ids.shape[0]
-        batch_size = next_token_ids.shape[0]
+        # batch_size = next_token_ids.shape[0]
         last_token_indices = cu_num_tokens[1:] - 1
 
         input_ids = torch.empty_like(target_token_ids)
@@ -159,10 +159,18 @@ class MtpProposer:
             suffix_kv_lens=None,
         )
 
+        # FIXME: need to pass in MLACommonMetadata
+        # attention_metadata = self.runner.attn_metadata_builder.build(
+        #     num_reqs=num_reqs,
+        #     num_actual_tokens=total_num_scheduled_tokens,
+        #     max_query_len=max_num_scheduled_tokens,
+        #     common_prefix_len=common_prefix_len,
+        # )
+
         with set_forward_context(attn_metadata, self.vllm_config):
             hidden_states = self.model(
                 input_ids=input_ids,
-                hidden_states=target_hidden_states,
+                previous_hidden_states=target_hidden_states,
                 positions=target_positions,
             )
         sample_hidden_states = hidden_states[last_token_indices]

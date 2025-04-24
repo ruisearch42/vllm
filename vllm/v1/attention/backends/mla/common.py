@@ -304,6 +304,7 @@ class MLACommonMetadata(Generic[D]):
 
     num_actual_tokens: int  # Number of tokens excluding padding.
     query_start_loc: torch.Tensor
+    block_table: torch.Tensor
     slot_mapping: torch.Tensor
 
     # New for MLA (compared to FlashAttention)
@@ -557,6 +558,7 @@ class MLACommonMetadataBuilder(Generic[M]):
         return self.metadata_cls(
             num_actual_tokens=num_actual_tokens,
             query_start_loc=query_start_loc,
+            block_table=block_table,
             slot_mapping=slot_mapping,
             head_dim=self.runner.model_config.get_head_size(),
             # MLACommonMetadata Chunk prefill specific
