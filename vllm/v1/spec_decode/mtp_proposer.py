@@ -9,7 +9,6 @@ from vllm.forward_context import set_forward_context
 from vllm.model_executor.model_loader.loader import get_model_loader
 from vllm.model_executor.model_loader.utils import set_default_torch_dtype
 from vllm.model_executor.models.deepseek_mtp import DeepSeekMTP
-from vllm.v1.attention.backends.flash_attn import FlashAttentionMetadata
 from vllm.v1.sample.metadata import SamplingMetadata
 
 
@@ -55,14 +54,13 @@ class MtpProposer:
     def __init__(
         self,
         vllm_config: VllmConfig,
-        device: torch.device,
+        runner: "GPUModelRunner",
     ):
         self.vllm_config = vllm_config
         self.num_speculative_tokens = (
             vllm_config.speculative_config.num_speculative_tokens)
         self.block_size = vllm_config.cache_config.block_size
-        # We need +1 here because the arange is used to set query_start_loc,
-        # which has one more element than batch_size.
+        self.runner = runner
 
     @staticmethod
     def prepare_inputs(
@@ -126,7 +124,7 @@ class MtpProposer:
         sampling_metadata: SamplingMetadata,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         num_tokens = target_token_ids.shape[0]
-        # batch_size = next_token_ids.shape[0]
+        batch_size = next_token_ids.shape[0]
         last_token_indices = cu_num_tokens[1:] - 1
 
         input_ids = torch.empty_like(target_token_ids)
@@ -143,29 +141,29 @@ class MtpProposer:
         # FIXME(woosuk): The below two ops cause synchronization. Optimize.
         max_seq_len = seq_lens.max().item()
         max_num_tokens = (cu_num_tokens[1:] - cu_num_tokens[:-1]).max().item()
-        attn_metadata = FlashAttentionMetadata(
-            num_actual_tokens=num_tokens,
-            max_query_len=max_num_tokens,
-            query_start_loc=cu_num_tokens,
-            max_seq_len=max_seq_len,
-            seq_lens=seq_lens,
-            block_table=block_table,
-            slot_mapping=target_slot_mapping,
-            # TODO(woosuk): Support cascade attention.
-            use_cascade=False,
-            common_prefix_len=0,
-            cu_prefix_query_lens=None,
-            prefix_kv_lens=None,
-            suffix_kv_lens=None,
-        )
+        # attn_metadata = FlashAttentionMetadata(
+        #     num_actual_tokens=num_tokens,
+        #     max_query_len=max_num_tokens,
+        #     query_start_loc=cu_num_tokens,
+        #     max_seq_len=max_seq_len,
+        #     seq_lens=seq_lens,
+        #     block_table=block_table,
+        #     slot_mapping=target_slot_mapping,
+        #     # TODO(woosuk): Support cascade attention.
+        #     use_cascade=False,
+        #     common_prefix_len=0,
+        #     cu_prefix_query_lens=None,
+        #     prefix_kv_lens=None,
+        #     suffix_kv_lens=None,
+        # )
 
         # FIXME: need to pass in MLACommonMetadata
-        # attention_metadata = self.runner.attn_metadata_builder.build(
-        #     num_reqs=num_reqs,
-        #     num_actual_tokens=total_num_scheduled_tokens,
-        #     max_query_len=max_num_scheduled_tokens,
-        #     common_prefix_len=common_prefix_len,
-        # )
+        attn_metadata = self.runner.attn_metadata_builder.build(
+            num_reqs=batch_size,
+            num_actual_tokens=num_tokens,
+            max_query_len=max_num_tokens,
+            common_prefix_len=0,
+        )
 
         with set_forward_context(attn_metadata, self.vllm_config):
             hidden_states = self.model(

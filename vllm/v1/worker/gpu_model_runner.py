@@ -179,7 +179,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         self.use_aux_hidden_state_outputs = True
                 elif self.speculative_config.method == "mtp":
                     self.drafter = MtpProposer(self.vllm_config,
-                                               self.device)  # type: ignore
+                                               self)  # type: ignore
                 else:
                     raise ValueError("Unknown speculative decoding method: "
                                      f"{self.speculative_config.method}")
