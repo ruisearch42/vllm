@@ -353,8 +353,9 @@ class MLACommonMetadataBuilder(Generic[M]):
         self.aot_schedule = is_vllm_fa and (get_flash_attn_version() == 3)
 
         # Dont try to access the runner on AMD
-        if self.aot_schedule:
-            self.page_size = self.runner.block_size
+        #if self.aot_schedule:
+        # Need page_size to compute max_context_chunk
+        self.page_size = self.runner.block_size
 
         if self.chunked_prefill_enabled:
             self.chunked_prefill_workspace_size = min(

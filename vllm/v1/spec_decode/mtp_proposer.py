@@ -173,12 +173,11 @@ class MtpProposer:
             )
         sample_hidden_states = hidden_states[last_token_indices]
         logits = self.model.compute_logits(sample_hidden_states, None)
-        draft_token_ids, draft_probs = compute_probs_and_sample_next_token(
-            logits, sampling_metadata)
+        draft_token_ids = logits.argmax(dim=-1)
 
         assert self.num_speculative_tokens == 1
-        # [batch_size, 1] and [batch_size, 1, vocab_size]
-        return draft_token_ids.view(-1, 1), draft_probs.unsqueeze(dim=1)
+        # [batch_size, 1]
+        return draft_token_ids.view(-1, 1)
 
     def load_model(self, target_model: nn.Module) -> None:
         loader = get_model_loader(self.vllm_config.load_config)
