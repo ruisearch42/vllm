@@ -136,6 +136,7 @@ class MtpProposer:
         input_ids[last_token_indices] = next_token_ids
 
         # FA requires seq_len to have dtype int32.
+        # FIXME: this is MLA attention
         seq_lens = (target_positions[last_token_indices] + 1).int()
 
         # FIXME(woosuk): The below two ops cause synchronization. Optimize.
@@ -157,7 +158,6 @@ class MtpProposer:
         #     suffix_kv_lens=None,
         # )
 
-        # FIXME: need to pass in MLACommonMetadata
         attn_metadata = self.runner.attn_metadata_builder.build(
             num_reqs=batch_size,
             num_actual_tokens=num_tokens,
@@ -168,8 +168,8 @@ class MtpProposer:
         with set_forward_context(attn_metadata, self.vllm_config):
             hidden_states = self.model(
                 input_ids=input_ids,
-                previous_hidden_states=target_hidden_states,
                 positions=target_positions,
+                previous_hidden_states=target_hidden_states,
             )
         sample_hidden_states = hidden_states[last_token_indices]
         logits = self.model.compute_logits(sample_hidden_states, None)
