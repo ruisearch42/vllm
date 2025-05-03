@@ -141,6 +141,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         self.attn_metadata_builder = self.attn_backend.get_builder_cls()(
             weakref.proxy(self))
+        print(f"self.attn_metadata_builder: {self.attn_metadata_builder}")
         self.cascade_attn_enabled = not self.model_config.disable_cascade_attn
 
         # Multi-modal data support
@@ -1264,9 +1265,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     dtype=torch.int32,
                     device=self.device,
                 )
-                #TODO: DeepSeek attention metadata is different from
-                # FlashAttentionMetadata (assumed for EAGLE); V1
-                # attention metadata is also not the same as V0.
+
                 cu_num_tokens, token_indices = self.drafter.prepare_inputs(
                     attn_metadata.query_start_loc,
                     num_rejected_tokens,

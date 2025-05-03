@@ -342,6 +342,7 @@ class MLACommonMetadataBuilder(Generic[M]):
                  metadata_cls: Optional[type[M]] = None):
         self.metadata_cls = metadata_cls \
             if metadata_cls is not None else MLACommonMetadata
+        logger.info(f"self.metadata_cls: {self.metadata_cls}")
         self.runner = runner
         scheduler_config = runner.scheduler_config
         model_config = runner.model_config

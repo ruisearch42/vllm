@@ -135,27 +135,12 @@ class MtpProposer:
         # E.g., [b1, b2, c1, c2, c3, c3] -> [a2, b2, b3, c2, c3, c4]
         input_ids[last_token_indices] = next_token_ids
 
-        # FA requires seq_len to have dtype int32.
-        # FIXME: this is MLA attention
-        seq_lens = (target_positions[last_token_indices] + 1).int()
-
-        # FIXME(woosuk): The below two ops cause synchronization. Optimize.
-        max_seq_len = seq_lens.max().item()
         max_num_tokens = (cu_num_tokens[1:] - cu_num_tokens[:-1]).max().item()
-        # attn_metadata = FlashAttentionMetadata(
-        #     num_actual_tokens=num_tokens,
-        #     max_query_len=max_num_tokens,
-        #     query_start_loc=cu_num_tokens,
-        #     max_seq_len=max_seq_len,
-        #     seq_lens=seq_lens,
-        #     block_table=block_table,
-        #     slot_mapping=target_slot_mapping,
-        #     # TODO(woosuk): Support cascade attention.
-        #     use_cascade=False,
-        #     common_prefix_len=0,
-        #     cu_prefix_query_lens=None,
-        #     prefix_kv_lens=None,
-        #     suffix_kv_lens=None,
+
+        # FIXME: decouple input_batch and scheduler_output from reorder_batch
+        # self.runner.attn_metadata_builder.reorder_batch(
+        #     input_batch=self.runner.input_batch,
+        #     scheduler_output=self.runner.scheduler_output,
         # )
 
         attn_metadata = self.runner.attn_metadata_builder.build(
