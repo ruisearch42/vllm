@@ -135,9 +135,15 @@ class MtpProposer:
         # E.g., [b1, b2, c1, c2, c3, c3] -> [a2, b2, b3, c2, c3, c4]
         input_ids[last_token_indices] = next_token_ids
 
-        max_num_tokens = (cu_num_tokens[1:] - cu_num_tokens[:-1]).max().item()
+        query_lens = cu_num_tokens[1:] - cu_num_tokens[:-1]
+        max_query_len = query_lens.max().item()
 
-        # FIXME: decouple input_batch and scheduler_output from reorder_batch
+        # FIXME: reorder_batch() needs to be called before build()
+        # because fields of attn_metadata_builder needs to be updated.
+        # However, currently reorder_batch() takes input_batch and
+        # scheduler_output as arguments, we should probably refactor
+        # the method to use new data structures which are independent
+        # from input_batch and scheduler_output.
         # self.runner.attn_metadata_builder.reorder_batch(
         #     input_batch=self.runner.input_batch,
         #     scheduler_output=self.runner.scheduler_output,
@@ -146,7 +152,7 @@ class MtpProposer:
         attn_metadata = self.runner.attn_metadata_builder.build(
             num_reqs=batch_size,
             num_actual_tokens=num_tokens,
-            max_query_len=max_num_tokens,
+            max_query_len=max_query_len,
             common_prefix_len=0,
         )
 
