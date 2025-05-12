@@ -245,6 +245,140 @@ class CoreEngineProcManager:
         }
 
 
+class CoreEngineActorManager:
+    """
+    Utility class to handle creation, readiness, and shutdown
+    of core engine Ray actors used by the AsyncLLM and LLMEngine.
+
+    Different from CoreEngineProcManager, this class manages
+    core engines for both local and remote nodes.
+    """
+
+    def __init__(
+        self,
+        local_engine_count: int,
+        start_index: int,
+        local_start_index: int,
+        vllm_config: VllmConfig,
+        addresses,
+        executor_class: type[Executor],
+        log_stats: bool,
+    ):
+        import copy
+
+        import ray
+        from ray._private.state import available_resources_per_node
+        from ray.util.scheduling_strategies import (
+            PlacementGroupSchedulingStrategy)
+        from ray.util.state import list_nodes
+
+        from vllm.v1.engine.core import DPEngineCoreActor
+
+        self.local_engine_actors: list[ray.ActorHandle] = []
+        self.remote_engine_actors: list[ray.ActorHandle] = []
+
+        dp_size = vllm_config.parallel_config.data_parallel_size
+        remote_engine_count = dp_size - local_engine_count
+
+        if ray.is_initialized():
+            logger.info(
+                "Ray is already initialized. Skipping Ray initialization.")
+        else:
+            ray.init()
+
+        nodes = list_nodes()
+        available_resources_by_id = available_resources_per_node()
+        available_resources_by_ip = {}
+        num_workers = vllm_config.parallel_config.world_size
+
+        dp_size_available = 0
+        for node in nodes:
+            node_ip = node.node_ip
+            node_id = node.node_id
+            node_resources = available_resources_by_id[node_id]
+            available_resources_by_ip[node_ip] = node_resources
+            # For now, each DP rank can only be assigned to one node
+            # TODO(rui): support allocating a single DP rank to multiple nodes
+            dp_size_available += node_resources["GPU"] // num_workers
+
+        assert dp_size_available >= dp_size, (
+            "Not enough resources to allocate DP ranks")
+
+        head_node_ip = \
+            vllm_config.parallel_config.data_parallel_master_ip
+
+        init_refs = []
+        for index in range(local_engine_count):
+            local_index = local_start_index + index
+            global_index = start_index + index
+            dp_vllm_config = copy.deepcopy(vllm_config)
+            bundles = [{
+                "GPU": 1.0,
+                "node:" + head_node_ip: 0.001
+            }] * num_workers + [{
+                "CPU": 1.0
+            }]
+            pg = ray.util.placement_group(
+                name=f"dp_rank_{global_index}",
+                strategy="STRICT_PACK",
+                bundles=bundles,
+            )
+            dp_vllm_config.parallel_config.placement_group = pg
+            actor = ray.remote(DPEngineCoreActor).options(
+                scheduling_strategy=PlacementGroupSchedulingStrategy(
+                    placement_group=pg,
+                    placement_group_bundle_index=num_workers,
+                )).remote(vllm_config=dp_vllm_config,
+                          executor_class=executor_class,
+                          log_stats=log_stats,
+                          addresses=addresses,
+                          on_head_node=True,
+                          engine_index=global_index,
+                          dp_rank=global_index,
+                          local_dp_rank=local_index)
+            self.local_engine_actors.append(actor)
+            init_refs.append(actor.wait_for_init.remote())
+
+        for index in range(remote_engine_count):
+            local_index = index
+            global_index = local_engine_count + index
+            bundles = [{"GPU": 1.0}] * num_workers + [{"CPU": 1.0}]
+            pg = ray.util.placement_group(
+                name=f"dp_rank_{global_index}",
+                strategy="STRICT_PACK",
+                bundles=bundles,
+            )
+            dp_vllm_config = copy.deepcopy(vllm_config)
+            dp_vllm_config.parallel_config.placement_group = pg
+            actor = ray.remote(DPEngineCoreActor).options(
+                scheduling_strategy=PlacementGroupSchedulingStrategy(
+                    placement_group=pg,
+                    placement_group_bundle_index=num_workers,
+                )).remote(vllm_config=dp_vllm_config,
+                          executor_class=executor_class,
+                          log_stats=log_stats,
+                          addresses=addresses,
+                          on_head_node=False,
+                          engine_index=global_index,
+                          dp_rank=global_index,
+                          local_dp_rank=local_index)
+            self.remote_engine_actors.append(actor)
+            init_refs.append(actor.wait_for_init.remote())
+
+        ray.get(init_refs)
+        self.run_refs = []
+        for actor in self.local_engine_actors + self.remote_engine_actors:
+            self.run_refs.append(actor.run.remote())
+
+    def get_run_refs(self):
+        return self.run_refs
+
+    def close(self):
+        import ray
+        for actor in self.local_engine_actors + self.remote_engine_actors:
+            ray.kill(actor)
+
+
 class CoreEngineState(Enum):
     NEW = auto()
     CONNECTED = auto()
@@ -383,7 +517,8 @@ def wait_for_engine_startup(
 
 def wait_for_completion_or_failure(
         api_server_manager: APIServerProcessManager,
-        local_engine_manager: Optional[CoreEngineProcManager] = None,
+        local_engine_manager: Optional[Union[CoreEngineProcManager,
+                                             CoreEngineActorManager]] = None,
         coordinator: Optional["DPCoordinator"] = None) -> None:
     """Wait for all processes to complete or detect if any fail.
     
@@ -402,14 +537,19 @@ def wait_for_completion_or_failure(
         if coordinator:
             sentinel_to_proc[coordinator.proc.sentinel] = coordinator.proc
 
+        actor_run_refs = []
         if local_engine_manager:
-            for proc in local_engine_manager.processes:
-                sentinel_to_proc[proc.sentinel] = proc
+            if isinstance(local_engine_manager, CoreEngineProcManager):
+                for proc in local_engine_manager.processes:
+                    sentinel_to_proc[proc.sentinel] = proc
+            elif isinstance(local_engine_manager, CoreEngineActorManager):
+                actor_run_refs = local_engine_manager.get_run_refs()
 
         # Check if any process terminates
-        while sentinel_to_proc:
+        while sentinel_to_proc or actor_run_refs:
             # Wait for any process to terminate
-            ready_sentinels: list[Any] = connection.wait(sentinel_to_proc)
+            ready_sentinels: list[Any] = connection.wait(sentinel_to_proc,
+                                                         timeout=5)
 
             # Process any terminated processes
             for sentinel in ready_sentinels:
@@ -420,6 +560,12 @@ def wait_for_completion_or_failure(
                     raise RuntimeError(
                         f"Process {proc.name} (PID: {proc.pid}) "
                         f"died with exit code {proc.exitcode}")
+
+            if actor_run_refs:
+                import ray
+                _, unready_refs = ray.wait(actor_run_refs, timeout=5)
+                actor_run_refs = unready_refs
+
     except KeyboardInterrupt:
         logger.info("Received KeyboardInterrupt, shutting down API servers...")
     except Exception as e:

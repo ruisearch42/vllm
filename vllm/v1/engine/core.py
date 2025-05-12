@@ -127,6 +127,8 @@ class EngineCore:
                         self.batch_queue_size)
             self.batch_queue = queue.Queue(self.batch_queue_size)
         self.vllm_config = vllm_config
+        self.step_fn = (self.step if self.batch_queue is None else
+                        self.step_with_batch_queue)
 
     def _initialize_kv_caches(
             self, vllm_config: VllmConfig) -> tuple[int, int, KVCacheConfig]:
@@ -362,18 +364,24 @@ class EngineCoreProc(EngineCore):
         log_stats: bool,
         engine_index: int = 0,
     ):
-        input_queue = queue.Queue[tuple[EngineCoreRequestType, Any]]()
-
-        executor_fail_callback = lambda: input_queue.put_nowait(
+        self.input_queue = queue.Queue[tuple[EngineCoreRequestType, Any]]()
+        self.output_queue = queue.Queue[Union[tuple[int, EngineCoreOutputs],
+                                              bytes]]()
+        executor_fail_callback = lambda: self.input_queue.put_nowait(
             (EngineCoreRequestType.EXECUTOR_FAILED, b''))
+
+        self.engine_index = engine_index
+        self.identity = self.engine_index.to_bytes(length=2,
+                                                   byteorder="little")
+        self.engines_running = False
+        self.last_counts = (0, 0)
 
         # Create input socket.
         input_ctx = zmq.Context()
-        identity = engine_index.to_bytes(length=2, byteorder="little")
         with make_zmq_socket(input_ctx,
                              handshake_address,
                              zmq.DEALER,
-                             identity=identity,
+                             identity=self.identity,
                              linger=5000,
                              bind=False) as handshake_socket:
 
@@ -393,12 +401,6 @@ class EngineCoreProc(EngineCore):
             super().__init__(vllm_config, executor_class, log_stats,
                              executor_fail_callback)
 
-            self.engine_index = engine_index
-            self.step_fn = (self.step if self.batch_queue is None else
-                            self.step_with_batch_queue)
-            self.engines_running = False
-            self.last_counts = (0, 0)
-
             # Send ready message.
             num_gpu_blocks = vllm_config.cache_config.num_gpu_blocks
             handshake_socket.send(
@@ -408,22 +410,24 @@ class EngineCoreProc(EngineCore):
                     "num_gpu_blocks": num_gpu_blocks,
                 }))
 
+        self._init_post_handshake(addresses)
+
+    def _init_post_handshake(self, addresses: EngineZmqAddresses):
+        self.client_count = len(addresses.outputs)
+
         # Background Threads and Queues for IO. These enable us to
         # overlap ZMQ socket IO with GPU since they release the GIL,
         # and to overlap some serialization/deserialization with the
         # model forward pass.
         # Threads handle Socket <-> Queues and core_busy_loop uses Queue.
-        self.input_queue = input_queue
-        self.output_queue = queue.Queue[Union[tuple[int, EngineCoreOutputs],
-                                              bytes]]()
         threading.Thread(target=self.process_input_sockets,
                          args=(addresses.inputs, addresses.coordinator_input,
-                               identity),
+                               self.identity),
                          daemon=True).start()
         self.output_thread = threading.Thread(
             target=self.process_output_sockets,
             args=(addresses.outputs, addresses.coordinator_output,
-                  engine_index),
+                  self.engine_index),
             daemon=True)
         self.output_thread.start()
 
@@ -748,15 +752,18 @@ class DPEngineCoreProc(EngineCoreProc):
         _add_prefix(sys.stdout, process_name, pid)
         _add_prefix(sys.stderr, process_name, pid)
 
-        # Counts forward-passes of the model so that we can synchronize
-        # finished with DP peers every N steps.
-        self.counter = 0
-        self.current_wave = 0
+        self._init_dp_states()
 
         # Initialize the engine.
         dp_rank = vllm_config.parallel_config.data_parallel_rank
         super().__init__(vllm_config, on_head_node, handshake_address,
                          executor_class, log_stats, dp_rank)
+
+    def _init_dp_states(self):
+        # Counts forward-passes of the model so that we can synchronize
+        # finished with DP peers every N steps.
+        self.counter = 0
+        self.current_wave = 0
 
     def _init_data_parallel(self, vllm_config: VllmConfig,
                             has_coordinator: bool):
@@ -881,3 +888,87 @@ class DPEngineCoreProc(EngineCoreProc):
 
         return ParallelConfig.has_unfinished_dp(self.dp_group,
                                                 local_unfinished)
+
+
+class DPEngineCoreActor(DPEngineCoreProc):
+    """
+    Ray Actor for running EngineCore in a data parallel context
+    """
+
+    def __init__(
+        self,
+        vllm_config: VllmConfig,
+        on_head_node: bool,
+        addresses,
+        executor_class: type[Executor],
+        log_stats: bool,
+        engine_index: int = 0,
+        dp_rank: int = 0,
+        local_dp_rank: int = 0,
+    ):
+        # TODO(rui): improve shutdown handling
+
+        # Ensure we can serialize transformer config after spawning
+        maybe_register_config_serialize_by_value()
+
+        parallel_config: ParallelConfig = vllm_config.parallel_config
+        assert parallel_config.data_parallel_size > 1 or dp_rank > 0
+        # Set data parallel rank for this engine process.
+        parallel_config.data_parallel_rank = dp_rank
+        parallel_config.data_parallel_rank_local = local_dp_rank
+
+        self.input_queue = queue.Queue[tuple[EngineCoreRequestType, Any]]()
+        self.output_queue = queue.Queue[Union[tuple[int, EngineCoreOutputs],
+                                              bytes]]()
+
+        executor_fail_callback = lambda: self.input_queue.put_nowait(
+            (EngineCoreRequestType.EXECUTOR_FAILED, b''))
+
+        # Ray sets CUDA_VISIBLE_DEVICES to empty string,
+        # we clean this up to be able to properly initialize
+        # data parallel groups.
+        del os.environ['CUDA_VISIBLE_DEVICES']
+        has_coordinator = addresses.coordinator_output is not None
+        # Set up data parallel environment.
+        self._init_data_parallel(vllm_config, has_coordinator)
+
+        self._init_dp_states()
+
+        # Initialize engine core and model.
+        EngineCore.__init__(self, vllm_config, executor_class, log_stats,
+                            executor_fail_callback)
+
+        self.engine_index = engine_index
+        self.identity = self.engine_index.to_bytes(length=2,
+                                                   byteorder="little")
+        self.step_fn = (self.step if self.batch_queue is None else
+                        self.step_with_batch_queue)
+        self.engines_running = False
+        self.last_counts = (0, 0)
+
+        self._init_post_handshake(addresses)
+
+    def wait_for_init(self):
+        """
+        Wait until the engine core is initialized.
+
+        This is just an empty method. When ray.get() on this method
+        (or any other method of the actor) returns, it is guaranteed
+        that actor creation (i.e., __init__) is complete.
+        """
+        pass
+
+    def run(self):
+        """
+        Run the engine core busy loop.
+        """
+        try:
+            self.run_busy_loop()
+        except SystemExit:
+            logger.debug("EngineCore exiting.")
+            raise
+        except Exception:
+            logger.exception("EngineCore encountered a fatal error.")
+            raise
+        finally:
+            self.shutdown()
