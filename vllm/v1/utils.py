@@ -262,8 +262,7 @@ class CoreEngineActorManager:
         start_index: int,
         local_start_index: int,
         vllm_config: VllmConfig,
-        input_address: str,
-        output_address: str,
+        addresses,
         executor_class: type[Executor],
         log_stats: bool,
     ):
@@ -284,8 +283,7 @@ class CoreEngineActorManager:
                 vllm_config=vllm_config,
                 executor_class=executor_class,
                 log_stats=log_stats,
-                input_address=input_address,
-                output_address=output_address,
+                addresses=addresses,
                 on_head_node=True,
                 engine_index=global_index,
                 dp_rank=global_index,
@@ -301,8 +299,7 @@ class CoreEngineActorManager:
                 vllm_config=vllm_config,
                 executor_class=executor_class,
                 log_stats=log_stats,
-                input_address=input_address,
-                output_address=output_address,
+                addresses=addresses,
                 on_head_node=False,
                 engine_index=global_index,
                 dp_rank=global_index,
@@ -488,6 +485,57 @@ def wait_for_completion_or_failure(
             coordinator.close()
         if local_engine_manager:
             local_engine_manager.close()
+
+
+def wait_for_ray_engine_actors(
+        api_server_manager: APIServerProcessManager,
+        engine_actor_manager: CoreEngineActorManager,
+        coordinator: Optional["DPCoordinator"] = None) -> None:
+    """Wait for all ray engine actors to complete or detect if any fail.
+    
+    Raises an exception if any process exits with a non-zero status.
+    """
+
+    try:
+        logger.info("Waiting for ray engine actors to complete ...")
+        # Create a mapping of sentinels to their corresponding processes
+        # for efficient lookup
+        sentinel_to_proc: dict[Any, Union[SpawnProcess, Process]] = {
+            proc.sentinel: proc
+            for proc in api_server_manager.processes
+        }
+
+        if coordinator:
+            sentinel_to_proc.update(
+                {coordinator.proc.sentinel: coordinator.proc})
+
+        # TODO(rui): check if any ray engine actor terminates
+        # Check if any process terminates
+        while sentinel_to_proc:
+            # Wait for any process to terminate
+            ready_sentinels: list[Any] = connection.wait(sentinel_to_proc)
+
+            # Process any terminated processes
+            for sentinel in ready_sentinels:
+                proc = sentinel_to_proc.pop(sentinel)
+
+                # Check if process exited with error
+                if proc.exitcode != 0:
+                    raise RuntimeError(
+                        f"Process {proc.name} (PID: {proc.pid}) "
+                        f"died with exit code {proc.exitcode}")
+    except KeyboardInterrupt:
+        logger.info("Received KeyboardInterrupt, shutting down API servers...")
+    except Exception as e:
+        logger.exception("Exception occurred while running API servers: %s",
+                         str(e))
+        raise
+    finally:
+        logger.info("Terminating remaining processes ...")
+        api_server_manager.close()
+        if coordinator:
+            coordinator.close()
+        engine_actor_manager.close()
 
 
 # Note(rob): shutdown function cannot be a bound method,

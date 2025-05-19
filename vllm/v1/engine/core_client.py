@@ -1144,17 +1144,6 @@ class RayDPClient(DPAsyncMPClient):
                     self.stats_update_address = \
                         coordinator.get_stats_publish_address()
 
-            # Start all engines.
-            self.resources.local_engine_manager = CoreEngineActorManager(
-                vllm_config=vllm_config,
-                executor_class=executor_class,
-                log_stats=log_stats,
-                input_address=input_address,
-                output_address=output_address,
-                local_engine_count=local_engine_count,
-                start_index=start_index,
-                local_start_index=local_start_index)
-
             self.core_engine = self.core_engines[0]
 
             self.utility_results: dict[int, AnyFuture] = {}
@@ -1180,3 +1169,36 @@ class RayDPClient(DPAsyncMPClient):
             self._ensure_output_queue_task()
         except RuntimeError:
             pass
+
+    def _init_engines_direct(self, vllm_config: VllmConfig, local_only: bool,
+                             local_start_index: int, input_address: str,
+                             output_address: str,
+                             executor_class: type[Executor], log_stats: bool):
+        """Self-contained client mode, launch engine and coordinator process
+        as needed."""
+
+        parallel_config = vllm_config.parallel_config
+        local_engine_count = parallel_config.data_parallel_size_local
+        start_index = parallel_config.data_parallel_rank
+
+        if len(self.core_engines) > 1:
+            self.resources.coordinator = DPCoordinator(parallel_config)
+
+        addresses: dict[str, Any] = {
+            "input_addresses": [input_address],
+            "output_addresses": [output_address],
+        }
+
+        coordinator = self.resources.coordinator
+        if coordinator is not None:
+            addresses.update(coordinator.get_engine_socket_addresses())
+
+        # Start all engines.
+        self.resources.local_engine_manager = CoreEngineActorManager(
+            vllm_config=vllm_config,
+            executor_class=executor_class,
+            log_stats=log_stats,
+            addresses=addresses,
+            local_engine_count=local_engine_count,
+            start_index=start_index,
+            local_start_index=local_start_index)
