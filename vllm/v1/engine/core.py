@@ -904,10 +904,10 @@ class DPEngineCoreActor(DPEngineCoreProc):
         executor_fail_callback = lambda: input_queue.put_nowait(
             (EngineCoreRequestType.EXECUTOR_FAILED, b''))
 
-        input_addresses: list[str] = addresses["input_address"]
-        output_addresses: list[str] = addresses["output_address"]
-        coord_in_addr: Optional[str] = addresses.get("coord_in_addr")
-        coord_out_addr: Optional[str] = addresses.get("coord_out_addr")
+        input_addresses: list[str] = addresses["input_addresses"]
+        output_addresses: list[str] = addresses["output_addresses"]
+        coord_in_addr: Optional[str] = addresses.get("coord_in_address")
+        coord_out_addr: Optional[str] = addresses.get("coord_out_address")
         self.client_count = len(output_addresses)
         self.coordinator = coord_out_addr is not None
 
@@ -921,14 +921,17 @@ class DPEngineCoreActor(DPEngineCoreProc):
         # Counts forward-passes of the model so that we can synchronize
         # finished with DP peers every N steps.
         self.counter = 0
+        self.current_wave = 0
 
         # Initialize engine core and model.
         EngineCore.__init__(self, vllm_config, executor_class, log_stats,
                             executor_fail_callback)
 
+        self.engine_index = engine_index
         self.step_fn = (self.step if self.batch_queue is None else
                         self.step_with_batch_queue)
         self.engines_running = False
+        self.last_counts = (0, 0)
 
         # Background Threads and Queues for IO. These enable us to
         # overlap ZMQ socket IO with GPU since they release the GIL,

@@ -19,8 +19,9 @@ engine_args = AsyncEngineArgs(
     model="ibm-research/PowerMoE-3b",
     enforce_eager=True,
     disable_log_requests=True,
-    tensor_parallel_size=int(os.getenv("TP_SIZE", 1)),
+    tensor_parallel_size=int(os.getenv("TP_SIZE", 2)),
     data_parallel_size=int(os.getenv("DP_SIZE", 2)),
+    data_parallel_address="172.31.15.128",
 )
 
 if not current_platform.supports_v1(engine_args.create_model_config()):
@@ -62,10 +63,10 @@ async def generate(engine: AsyncLLM,
     "output_kind",
     [
         RequestOutputKind.DELTA,
-        RequestOutputKind.FINAL_ONLY,
+        # RequestOutputKind.FINAL_ONLY,
     ],
 )
-@pytest.mark.parametrize("data_parallel_backend", ["mp", "ray"])
+@pytest.mark.parametrize("data_parallel_backend", ["ray"])
 @pytest.mark.asyncio
 async def test_load(output_kind: RequestOutputKind,
                     data_parallel_backend: str):

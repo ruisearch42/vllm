@@ -1071,7 +1071,9 @@ class RayDPClient(DPAsyncMPClient):
         executor_class: type[Executor],
         log_stats: bool,
         client_addresses: Optional[dict[str, str]] = None,
+        client_index: int = 0,
     ):
+        self.client_index = client_index
         self.current_wave = 0
         self.engines_running = False
         self.reqs_in_flight: dict[str, CoreEngine] = {}
@@ -1084,6 +1086,14 @@ class RayDPClient(DPAsyncMPClient):
         # ZMQ setup.
         sync_ctx = zmq.Context(io_threads=2)
         self.ctx = zmq.asyncio.Context(sync_ctx)
+
+        # List of [waiting, running] pair per engine.
+        self.lb_engines: list[list[int]] = []
+        self.first_req_sock_addr = get_open_zmq_inproc_path()
+        self.first_req_send_socket = make_zmq_socket(self.ctx,
+                                                     self.first_req_sock_addr,
+                                                     zmq.PAIR,
+                                                     bind=True)
 
         # This will ensure resources created so far are closed
         # when the client is garbage collected, even if an
