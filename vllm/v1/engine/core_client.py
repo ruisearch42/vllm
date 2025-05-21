@@ -705,9 +705,8 @@ class AsyncMPClient(MPClient):
             client_addresses=client_addresses,
         )
 
-        self.client_index = client_index
-        self.outputs_queue = asyncio.Queue[Union[EngineCoreOutputs,
-                                                 Exception]]()
+        self._init_async_state(client_index)
+
         try:
             # If we are running in an asyncio event loop, start the queue task.
             # Otherwise, it will be started lazily. If it is not started here,
@@ -717,6 +716,11 @@ class AsyncMPClient(MPClient):
             self._ensure_output_queue_task()
         except RuntimeError:
             pass
+    
+    def _init_async_state(self, client_index: int):
+        self.client_index = client_index
+        self.outputs_queue = asyncio.Queue[Union[EngineCoreOutputs,
+                                                 Exception]]()
 
     def _ensure_output_queue_task(self):
         resources = self.resources
@@ -895,16 +899,26 @@ class DPAsyncMPClient(AsyncMPClient):
                  log_stats: bool,
                  client_addresses: Optional[dict[str, str]] = None,
                  client_index: int = 0):
+        super().__init__(vllm_config, executor_class, log_stats,
+                         client_addresses, client_index)
+
+        self._init_dp_state()
+
+        try:
+            # If we are running in an asyncio event loop, start the stats task.
+            # Otherwise, it will be started lazily.
+            asyncio.get_running_loop()
+            self._ensure_stats_update_task()
+        except RuntimeError:
+            pass
+    
+    def _init_dp_state(self):
+        assert len(self.core_engines) > 1
 
         self.current_wave = 0
         self.engines_running = False
         # To route aborts to the correct engine.
         self.reqs_in_flight: dict[str, CoreEngine] = {}
-
-        super().__init__(vllm_config, executor_class, log_stats,
-                         client_addresses, client_index)
-
-        assert len(self.core_engines) > 1
 
         # List of [waiting, running] pair per engine.
         self.lb_engines: list[list[int]] = []
@@ -914,13 +928,6 @@ class DPAsyncMPClient(AsyncMPClient):
                                                      self.first_req_sock_addr,
                                                      zmq.PAIR,
                                                      bind=True)
-        try:
-            # If we are running in an asyncio event loop, start the stats task.
-            # Otherwise, it will be started lazily.
-            asyncio.get_running_loop()
-            self._ensure_stats_update_task()
-        except RuntimeError:
-            pass
 
     def _ensure_stats_update_task(self):
         resources = self.resources
@@ -1073,122 +1080,8 @@ class RayDPClient(DPAsyncMPClient):
         client_addresses: Optional[dict[str, str]] = None,
         client_index: int = 0,
     ):
-        self.client_index = client_index
-        self.current_wave = 0
-        self.engines_running = False
-        self.reqs_in_flight: dict[str, CoreEngine] = {}
-
-        self.vllm_config = vllm_config
-        # Serialization setup.
-        self.encoder = MsgpackEncoder()
-        self.decoder = MsgpackDecoder(EngineCoreOutputs)
-
-        # ZMQ setup.
-        sync_ctx = zmq.Context(io_threads=2)
-        self.ctx = zmq.asyncio.Context(sync_ctx)
-
-        # List of [waiting, running] pair per engine.
-        self.lb_engines: list[list[int]] = []
-        self.first_req_sock_addr = get_open_zmq_inproc_path()
-        self.first_req_send_socket = make_zmq_socket(self.ctx,
-                                                     self.first_req_sock_addr,
-                                                     zmq.PAIR,
-                                                     bind=True)
-
-        # This will ensure resources created so far are closed
-        # when the client is garbage collected, even if an
-        # exception is raised mid-construction.
-        self.resources = BackgroundResources(ctx=sync_ctx)
-        self._finalizer = weakref.finalize(self, self.resources)
-        success = False
-        try:
-            parallel_config = vllm_config.parallel_config
-            local_engine_count = parallel_config.data_parallel_size_local
-            start_index = parallel_config.data_parallel_rank
-            local_start_index = parallel_config.data_parallel_rank_local
-
-            # SPMD mode is where there is an LLM instance per DP rank and
-            # one core engine per LLM, see
-            # examples/offline_inference/data_parallel.py.
-            spmd_mode = local_start_index is not None
-            if spmd_mode:
-                assert local_engine_count == 1
-                self.core_engines = [
-                    CoreEngine(index=local_start_index, local=True)
-                ]
-            else:
-                assert start_index == 0
-                local_start_index = 0
-                self.core_engines = [
-                    CoreEngine(index=i, local=(i < local_engine_count))
-                    for i in range(parallel_config.data_parallel_size)
-                ]
-
-            dp_size = parallel_config.data_parallel_size
-            local_only = spmd_mode or local_engine_count == dp_size
-
-            self.stats_update_address: Optional[str] = None
-            if client_addresses is not None:
-                input_address = client_addresses["input_address"]
-                output_address = client_addresses["output_address"]
-                self.stats_update_address = client_addresses.get(
-                    "stats_update_address")
-            else:
-                host = parallel_config.data_parallel_master_ip
-                input_address = get_engine_client_zmq_addr(local_only, host)
-                output_address = get_engine_client_zmq_addr(local_only, host)
-
-            # Create input and output sockets.
-            self.input_socket = self.resources.input_socket = make_zmq_socket(
-                self.ctx, input_address, zmq.ROUTER, bind=True)
-            self.resources.output_socket = make_zmq_socket(
-                self.ctx, output_address, zmq.PULL)
-
-            if client_addresses is None:
-                self._init_engines_direct(vllm_config, local_only,
-                                          local_start_index, input_address,
-                                          output_address, executor_class,
-                                          log_stats)
-                coordinator = self.resources.coordinator
-                if coordinator:
-                    self.stats_update_address = \
-                        coordinator.get_stats_publish_address()
-
-            # Wait for ready messages from each engine on the input socket.
-            identities = set(e.identity for e in self.core_engines)
-            sync_input_socket = zmq.Socket.shadow(self.input_socket)
-            while identities:
-                if not sync_input_socket.poll(timeout=600_000):
-                    raise TimeoutError("Timed out waiting for engines to send"
-                                       "initial message on input socket.")
-                identity, _ = sync_input_socket.recv_multipart()
-                identities.remove(identity)
-
-            self.core_engine = self.core_engines[0]
-
-            self.utility_results: dict[int, AnyFuture] = {}
-
-            # Request objects which may contain pytorch-allocated tensors
-            # that we need to keep references to until zmq is done with the
-            # underlying data.
-            self.pending_messages = deque[tuple[zmq.MessageTracker, Any]]()
-            self.outputs_queue = asyncio.Queue[Union[EngineCoreOutputs,
-                                                     Exception]]()
-
-            success = True
-        finally:
-            if not success:
-                self._finalizer()
-
-        try:
-            # If we are running in an asyncio event loop, start the queue task.
-            # Otherwise, it will be started lazily. If it is not started here,
-            # we could miss EXECUTOR_FAILED messages from engine core if they
-            # occur prior to any requests being sent.
-            asyncio.get_running_loop()
-            self._ensure_output_queue_task()
-        except RuntimeError:
-            pass
+        super().__init__(vllm_config, executor_class, log_stats,
+                         client_addresses, client_index)
 
     def _init_engines_direct(self, vllm_config: VllmConfig, local_only: bool,
                              local_start_index: int, input_address: str,
