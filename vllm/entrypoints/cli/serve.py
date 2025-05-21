@@ -30,7 +30,7 @@ from vllm.v1.metrics.prometheus import setup_multiprocess_prometheus
 from vllm.v1.utils import (APIServerProcessManager, CoreEngine,
                            CoreEngineActorManager, get_engine_client_zmq_addr,
                            wait_for_completion_or_failure,
-                           wait_for_engine_startup, wait_for_ray_engine_actors)
+                           wait_for_engine_startup)
 
 logger = init_logger(__name__)
 
@@ -244,8 +244,8 @@ def run_multi_api_server(args: argparse.Namespace):
             output_addresses=output_addresses,
             stats_update_address=stats_update_address)
 
-        wait_for_ray_engine_actors(api_server_manager=api_server_manager,
-                                   engine_actor_manager=engine_actor_manager,
+        wait_for_completion_or_failure(api_server_manager=api_server_manager,
+                                   local_engine_manager=engine_actor_manager,
                                    coordinator=coordinator)
         return
 

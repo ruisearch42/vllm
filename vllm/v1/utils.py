@@ -307,7 +307,7 @@ class CoreEngineActorManager:
         head_node_ip = \
             vllm_config.parallel_config.data_parallel_master_ip
 
-        refs = []
+        init_refs = []
         for index in range(local_engine_count):
             local_index = local_start_index + index
             global_index = start_index + index
@@ -337,7 +337,7 @@ class CoreEngineActorManager:
                           dp_rank=global_index,
                           local_dp_rank=local_index)
             self.local_engine_actors.append(actor)
-            refs.append(actor.wait_for_init.remote())
+            init_refs.append(actor.wait_for_init.remote())
 
         for index in range(remote_engine_count):
             local_index = index
@@ -363,11 +363,15 @@ class CoreEngineActorManager:
                           dp_rank=global_index,
                           local_dp_rank=local_index)
             self.remote_engine_actors.append(actor)
-            refs.append(actor.wait_for_init.remote())
+            init_refs.append(actor.wait_for_init.remote())
 
-        ray.get(refs)
+        ray.get(init_refs)
+        self.run_refs = []
         for actor in self.local_engine_actors + self.remote_engine_actors:
-            actor.run.remote()
+            self.run_refs.append(actor.run.remote())
+
+    def get_run_refs(self):
+        return self.run_refs
 
     def close(self):
         import ray
@@ -490,7 +494,7 @@ def wait_for_engine_startup(
 
 def wait_for_completion_or_failure(
         api_server_manager: APIServerProcessManager,
-        local_engine_manager: Optional[CoreEngineProcManager] = None,
+        local_engine_manager: Optional[Union[CoreEngineProcManager, CoreEngineActorManager]] = None,
         coordinator: Optional["DPCoordinator"] = None) -> None:
     """Wait for all processes to complete or detect if any fail.
     
@@ -509,15 +513,19 @@ def wait_for_completion_or_failure(
         if coordinator:
             sentinel_to_proc[coordinator.proc.sentinel] = coordinator.proc
 
+        actor_run_refs = []
         if local_engine_manager:
-            for proc in local_engine_manager.processes:
-                sentinel_to_proc[proc.sentinel] = proc
+            if isinstance(local_engine_manager, CoreEngineProcManager):
+                for proc in local_engine_manager.processes:
+                    sentinel_to_proc[proc.sentinel] = proc
+            elif isinstance(local_engine_manager, CoreEngineActorManager):
+                actor_run_refs = local_engine_manager.get_run_refs()
 
         # Check if any process terminates
-        while sentinel_to_proc:
+        while sentinel_to_proc or actor_run_refs:
             # Wait for any process to terminate
-            ready_sentinels: list[Any] = connection.wait(sentinel_to_proc)
-
+            ready_sentinels: list[Any] = connection.wait(sentinel_to_proc, timeout=5)
+            
             # Process any terminated processes
             for sentinel in ready_sentinels:
                 proc = sentinel_to_proc.pop(sentinel)
@@ -527,6 +535,12 @@ def wait_for_completion_or_failure(
                     raise RuntimeError(
                         f"Process {proc.name} (PID: {proc.pid}) "
                         f"died with exit code {proc.exitcode}")
+
+            if actor_run_refs:
+                import ray
+                _, unready_refs = ray.wait(actor_run_refs, timeout=5)
+                actor_run_refs = unready_refs
+
     except KeyboardInterrupt:
         logger.info("Received KeyboardInterrupt, shutting down API servers...")
     except Exception as e:
@@ -540,57 +554,6 @@ def wait_for_completion_or_failure(
             coordinator.close()
         if local_engine_manager:
             local_engine_manager.close()
-
-
-def wait_for_ray_engine_actors(
-        api_server_manager: APIServerProcessManager,
-        engine_actor_manager: CoreEngineActorManager,
-        coordinator: Optional["DPCoordinator"] = None) -> None:
-    """Wait for all ray engine actors to complete or detect if any fail.
-    
-    Raises an exception if any process exits with a non-zero status.
-    """
-
-    try:
-        logger.info("Waiting for ray engine actors to complete ...")
-        # Create a mapping of sentinels to their corresponding processes
-        # for efficient lookup
-        sentinel_to_proc: dict[Any, Union[SpawnProcess, Process]] = {
-            proc.sentinel: proc
-            for proc in api_server_manager.processes
-        }
-
-        if coordinator:
-            sentinel_to_proc.update(
-                {coordinator.proc.sentinel: coordinator.proc})
-
-        # TODO(rui): check if any ray engine actor terminates
-        # Check if any process terminates
-        while sentinel_to_proc:
-            # Wait for any process to terminate
-            ready_sentinels: list[Any] = connection.wait(sentinel_to_proc)
-
-            # Process any terminated processes
-            for sentinel in ready_sentinels:
-                proc = sentinel_to_proc.pop(sentinel)
-
-                # Check if process exited with error
-                if proc.exitcode != 0:
-                    raise RuntimeError(
-                        f"Process {proc.name} (PID: {proc.pid}) "
-                        f"died with exit code {proc.exitcode}")
-    except KeyboardInterrupt:
-        logger.info("Received KeyboardInterrupt, shutting down API servers...")
-    except Exception as e:
-        logger.exception("Exception occurred while running API servers: %s",
-                         str(e))
-        raise
-    finally:
-        logger.info("Terminating remaining processes ...")
-        api_server_manager.close()
-        if coordinator:
-            coordinator.close()
-        engine_actor_manager.close()
 
 
 # Note(rob): shutdown function cannot be a bound method,
