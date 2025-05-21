@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from enum import Enum, auto
 from multiprocessing import Process, connection
+from multiprocessing.context import SpawnProcess
 from multiprocessing.process import BaseProcess
 from typing import (TYPE_CHECKING, Any, Callable, Generic, Optional, TypeVar,
                     Union, overload)
