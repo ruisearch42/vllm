@@ -19,7 +19,7 @@ engine_args = AsyncEngineArgs(
     model="ibm-research/PowerMoE-3b",
     enforce_eager=True,
     disable_log_requests=True,
-    tensor_parallel_size=int(os.getenv("TP_SIZE", 2)),
+    tensor_parallel_size=int(os.getenv("TP_SIZE", 1)),
     data_parallel_size=int(os.getenv("DP_SIZE", 2)),
     data_parallel_address="172.31.15.128",
 )

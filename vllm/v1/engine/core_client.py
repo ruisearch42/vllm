@@ -283,6 +283,8 @@ class BackgroundResources:
     input_socket: Optional[Union[zmq.Socket, zmq.asyncio.Socket]] = None
     output_queue_task: Optional[asyncio.Task] = None
     stats_update_task: Optional[asyncio.Task] = None
+    first_req_send_socket: Optional[Union[zmq.Socket,
+                                          zmq.asyncio.Socket]] = None
     shutdown_path: Optional[str] = None
 
     # Set if any of the engines are dead. Here so that the output
@@ -309,6 +311,8 @@ class BackgroundResources:
             self.output_socket.close(linger=0)
         if self.input_socket is not None:
             self.input_socket.close(linger=0)
+        if self.first_req_send_socket is not None:
+            self.first_req_send_socket.close(linger=0)
         if self.shutdown_path is not None:
             # We must ensure that the sync output socket is
             # closed cleanly in its own thread.
@@ -716,7 +720,7 @@ class AsyncMPClient(MPClient):
             self._ensure_output_queue_task()
         except RuntimeError:
             pass
-    
+
     def _init_async_state(self, client_index: int):
         self.client_index = client_index
         self.outputs_queue = asyncio.Queue[Union[EngineCoreOutputs,
@@ -911,7 +915,7 @@ class DPAsyncMPClient(AsyncMPClient):
             self._ensure_stats_update_task()
         except RuntimeError:
             pass
-    
+
     def _init_dp_state(self):
         assert len(self.core_engines) > 1
 
@@ -924,10 +928,9 @@ class DPAsyncMPClient(AsyncMPClient):
         self.lb_engines: list[list[int]] = []
 
         self.first_req_sock_addr = get_open_zmq_inproc_path()
-        self.first_req_send_socket = make_zmq_socket(self.ctx,
-                                                     self.first_req_sock_addr,
-                                                     zmq.PAIR,
-                                                     bind=True)
+        self.resources.first_req_send_socket = \
+            self.first_req_send_socket = make_zmq_socket(
+            self.ctx, self.first_req_sock_addr, zmq.PAIR, bind=True)
 
     def _ensure_stats_update_task(self):
         resources = self.resources
@@ -951,7 +954,10 @@ class DPAsyncMPClient(AsyncMPClient):
                 poller.register(first_req_rcv_socket, zmq.POLLIN)
 
                 while True:
-                    events = await poller.poll()
+                    events = await poller.poll(timeout=1000)
+                    if events is None:
+                        logger.warning("Poller timed out")
+                        continue
                     if not self.engines_running and len(events) == 2 or (
                             events[0][0] == first_req_rcv_socket):
                         # Send a message to notify the coordinator that
