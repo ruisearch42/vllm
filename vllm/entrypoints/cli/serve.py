@@ -235,8 +235,6 @@ def run_multi_api_server(args: argparse.Namespace):
 
         engine_actor_manager = CoreEngineActorManager(
             local_engine_count=local_engine_count,
-            start_index=args.data_parallel_start_rank,
-            local_start_index=0,
             vllm_config=vllm_config,
             addresses=addresses,
             executor_class=Executor.get_class(vllm_config),

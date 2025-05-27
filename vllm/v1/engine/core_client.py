@@ -1099,7 +1099,8 @@ class RayDPClient(DPAsyncMPClient):
 
         parallel_config = vllm_config.parallel_config
         local_engine_count = parallel_config.data_parallel_size_local
-        start_index = parallel_config.data_parallel_rank
+        assert parallel_config.data_parallel_rank == 0
+        assert local_start_index == 0
 
         if len(self.core_engines) > 1:
             self.resources.coordinator = DPCoordinator(parallel_config)
@@ -1120,6 +1121,4 @@ class RayDPClient(DPAsyncMPClient):
             executor_class=executor_class,
             log_stats=log_stats,
             addresses=addresses,
-            local_engine_count=local_engine_count,
-            start_index=start_index,
-            local_start_index=local_start_index)
+            local_engine_count=local_engine_count)
