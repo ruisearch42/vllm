@@ -38,7 +38,7 @@ from vllm.test_utils import MODEL_WEIGHTS_S3_BUCKET, MODELS_ON_S3
 from vllm.transformers_utils.utils import check_gguf_file
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import (STR_DUAL_CHUNK_FLASH_ATTN_VAL, FlexibleArgumentParser,
-                        GiB_bytes, is_in_doc_build, is_in_ray_actor)
+                        GiB_bytes, get_ip, is_in_doc_build, is_in_ray_actor)
 
 # yapf: enable
 
@@ -1056,9 +1056,15 @@ class EngineArgs:
 
         # DP address, used in multi-node case for torch distributed group
         # and ZMQ sockets.
-        data_parallel_address = self.data_parallel_address if (
-            self.data_parallel_address
-            is not None) else ParallelConfig.data_parallel_master_ip
+        if self.data_parallel_address is None:
+            if self.data_parallel_backend == "ray":
+                host_ip = get_ip()
+                logger.info(f"Using host IP as Ray data parallel address: {host_ip}")
+                data_parallel_address = host_ip
+            else:
+                data_parallel_address = ParallelConfig.data_parallel_master_ip
+        else:
+            data_parallel_address = self.data_parallel_address
 
         # This port is only used when there are remote data parallel engines,
         # otherwise the local IPC transport is used.
