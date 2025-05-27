@@ -1059,9 +1059,14 @@ class EngineArgs:
         if self.data_parallel_address is None:
             if self.data_parallel_backend == "ray":
                 host_ip = get_ip()
-                logger.info(f"Using host IP as Ray data parallel address: {host_ip}")
+                logger.info(
+                    "Using host IP %s as ray-based data parallel address",
+                    host_ip)
                 data_parallel_address = host_ip
             else:
+                assert self.data_parallel_backend == "mp", (
+                    "data_parallel_backend can only be ray or mp, got %s",
+                    self.data_parallel_backend)
                 data_parallel_address = ParallelConfig.data_parallel_master_ip
         else:
             data_parallel_address = self.data_parallel_address

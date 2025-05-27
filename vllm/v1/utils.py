@@ -112,6 +112,45 @@ def get_engine_client_zmq_addr(local_only: bool,
         host, port or get_open_port()))
 
 
+class CoreEngineState(Enum):
+    NEW = auto()
+    CONNECTED = auto()
+    READY = auto()
+
+
+class CoreEngine:
+    """One per data parallel rank."""
+
+    def __init__(self, index: int = 0, local: bool = True):
+        self.local = local
+        self.index = index
+        self.identity = index.to_bytes(2, "little")
+
+        self.state = CoreEngineState.NEW
+
+
+@dataclass
+class EngineZmqAddresses:
+    # ZMQ input socket addresses for each front-end client (requests)
+    inputs: list[str]
+    # ZMQ output socket addresses for each front-end client (responses)
+    outputs: list[str]
+    # ZMQ input socket address of DP coordinator if applicable
+    coordinator_input: Optional[str] = None
+    # ZMQ output socket address of DP coordinator if applicable
+    coordinator_output: Optional[str] = None
+
+
+@dataclass
+class EngineHandshakeMetadata:
+    """Metadata sent to each engine process during startup handshake,
+    including addresses of the front-end ZMQ queues that they should
+    connect to.
+    """
+    addresses: EngineZmqAddresses
+    parallel_config: dict[str, Union[int, str]]
+
+
 class APIServerProcessManager:
     """Manages a group of API server processes.
     
@@ -260,7 +299,7 @@ class CoreEngineActorManager:
         start_index: int,
         local_start_index: int,
         vllm_config: VllmConfig,
-        addresses,
+        addresses: EngineZmqAddresses,
         executor_class: type[Executor],
         log_stats: bool,
     ):
@@ -377,45 +416,6 @@ class CoreEngineActorManager:
         import ray
         for actor in self.local_engine_actors + self.remote_engine_actors:
             ray.kill(actor)
-
-
-class CoreEngineState(Enum):
-    NEW = auto()
-    CONNECTED = auto()
-    READY = auto()
-
-
-class CoreEngine:
-    """One per data parallel rank."""
-
-    def __init__(self, index: int = 0, local: bool = True):
-        self.local = local
-        self.index = index
-        self.identity = index.to_bytes(2, "little")
-
-        self.state = CoreEngineState.NEW
-
-
-@dataclass
-class EngineZmqAddresses:
-    # ZMQ input socket addresses for each front-end client (requests)
-    inputs: list[str]
-    # ZMQ output socket addresses for each front-end client (responses)
-    outputs: list[str]
-    # ZMQ input socket address of DP coordinator if applicable
-    coordinator_input: Optional[str] = None
-    # ZMQ output socket address of DP coordinator if applicable
-    coordinator_output: Optional[str] = None
-
-
-@dataclass
-class EngineHandshakeMetadata:
-    """Metadata sent to each engine process during startup handshake,
-    including addresses of the front-end ZMQ queues that they should
-    connect to.
-    """
-    addresses: EngineZmqAddresses
-    parallel_config: dict[str, Union[int, str]]
 
 
 def wait_for_engine_startup(
