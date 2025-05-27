@@ -372,7 +372,6 @@ class CoreEngineActorManager:
                           log_stats=log_stats,
                           addresses=addresses,
                           on_head_node=True,
-                          engine_index=global_index,
                           dp_rank=global_index,
                           local_dp_rank=local_index)
             self.local_engine_actors.append(actor)
@@ -398,7 +397,6 @@ class CoreEngineActorManager:
                           log_stats=log_stats,
                           addresses=addresses,
                           on_head_node=False,
-                          engine_index=global_index,
                           dp_rank=global_index,
                           local_dp_rank=local_index)
             self.remote_engine_actors.append(actor)

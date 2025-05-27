@@ -893,7 +893,7 @@ class DPEngineCoreProc(EngineCoreProc):
 
 class DPEngineCoreActor(DPEngineCoreProc):
     """
-    Ray Actor for running EngineCore in a data parallel context
+    Ray actor for running EngineCore in a data parallel context
     """
 
     def __init__(
@@ -903,7 +903,6 @@ class DPEngineCoreActor(DPEngineCoreProc):
         addresses: EngineZmqAddresses,
         executor_class: type[Executor],
         log_stats: bool,
-        engine_index: int = 0,
         dp_rank: int = 0,
         local_dp_rank: int = 0,
     ):
@@ -912,7 +911,6 @@ class DPEngineCoreActor(DPEngineCoreProc):
         vllm_config.parallel_config.data_parallel_rank_local = \
             local_dp_rank
 
-        # TODO(rui): improve shutdown handling
         super().__init__(vllm_config, on_head_node, "", executor_class,
                          log_stats)
 
@@ -924,7 +922,8 @@ class DPEngineCoreActor(DPEngineCoreProc):
                            on_head_node: bool, vllm_config: VllmConfig):
         """
         For Ray, we don't need to actually perform handshake.
-        All information is known from the actor creation.
+        All addresses information is known before the actor creation.
+        Therefore, we simply yield these addresses.
         """
         yield self.addresses
 
