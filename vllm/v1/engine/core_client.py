@@ -276,8 +276,10 @@ class BackgroundResources:
     circular reference back to the client object."""
 
     ctx: Union[zmq.Context]
-    local_engine_manager: Optional[Union[CoreEngineProcManager,
-                                         CoreEngineActorManager]] = None
+    # If CoreEngineProcManager, it manages local engines;
+    # if CoreEngineActorManager, it manages all engines.
+    engine_manager: Optional[Union[CoreEngineProcManager,
+                                   CoreEngineActorManager]] = None
     coordinator: Optional[DPCoordinator] = None
     output_socket: Optional[Union[zmq.Socket, zmq.asyncio.Socket]] = None
     input_socket: Optional[Union[zmq.Socket, zmq.asyncio.Socket]] = None
@@ -294,8 +296,8 @@ class BackgroundResources:
         """Clean up background resources."""
 
         self.engine_dead = True
-        if self.local_engine_manager is not None:
-            self.local_engine_manager.close()
+        if self.engine_manager is not None:
+            self.engine_manager.close()
         if self.coordinator is not None:
             self.coordinator.close()
 
@@ -462,7 +464,7 @@ class MPClient(EngineCoreClient):
             if local_engine_count:
                 # In server mode, start_index and local_start_index will
                 # both be 0.
-                self.resources.local_engine_manager = CoreEngineProcManager(
+                self.resources.engine_manager = CoreEngineProcManager(
                     EngineCoreProc.run_engine_core,
                     vllm_config=vllm_config,
                     executor_class=executor_class,
@@ -489,7 +491,8 @@ class MPClient(EngineCoreClient):
             addresses.coordinator_input, addresses.coordinator_output = (
                 coordinator.get_engine_socket_addresses())
 
-        proc_manager = self.resources.local_engine_manager
+        proc_manager = self.resources.engine_manager
+        assert isinstance(proc_manager, CoreEngineProcManager)
         if proc_manager is not None:
             assert isinstance(proc_manager, CoreEngineProcManager), (
                 "_wait_for_engine_startup should only be "
@@ -708,8 +711,9 @@ class AsyncMPClient(MPClient):
             client_addresses=client_addresses,
         )
 
-        self._init_async_state(client_index)
-
+        self.client_index = client_index
+        self.outputs_queue = asyncio.Queue[Union[EngineCoreOutputs,
+                                                 Exception]]()
         try:
             # If we are running in an asyncio event loop, start the queue task.
             # Otherwise, it will be started lazily. If it is not started here,
@@ -719,11 +723,6 @@ class AsyncMPClient(MPClient):
             self._ensure_output_queue_task()
         except RuntimeError:
             pass
-
-    def _init_async_state(self, client_index: int):
-        self.client_index = client_index
-        self.outputs_queue = asyncio.Queue[Union[EngineCoreOutputs,
-                                                 Exception]]()
 
     def _ensure_output_queue_task(self):
         resources = self.resources
@@ -902,26 +901,15 @@ class DPAsyncMPClient(AsyncMPClient):
                  log_stats: bool,
                  client_addresses: Optional[dict[str, str]] = None,
                  client_index: int = 0):
-        super().__init__(vllm_config, executor_class, log_stats,
-                         client_addresses, client_index)
-
-        self._init_dp_state()
-
-        try:
-            # If we are running in an asyncio event loop, start the stats task.
-            # Otherwise, it will be started lazily.
-            asyncio.get_running_loop()
-            self._ensure_stats_update_task()
-        except RuntimeError:
-            pass
-
-    def _init_dp_state(self):
-        assert len(self.core_engines) > 1
-
         self.current_wave = 0
         self.engines_running = False
         # To route aborts to the correct engine.
         self.reqs_in_flight: dict[str, CoreEngine] = {}
+
+        super().__init__(vllm_config, executor_class, log_stats,
+                         client_addresses, client_index)
+
+        assert len(self.core_engines) > 1
 
         # List of [waiting, running] pair per engine.
         self.lb_engines: list[list[int]] = []
@@ -932,6 +920,13 @@ class DPAsyncMPClient(AsyncMPClient):
                             self.first_req_sock_addr,
                             zmq.PAIR,
                             bind=True))
+        try:
+            # If we are running in an asyncio event loop, start the stats task.
+            # Otherwise, it will be started lazily.
+            asyncio.get_running_loop()
+            self._ensure_stats_update_task()
+        except RuntimeError:
+            pass
 
     def _ensure_stats_update_task(self):
         resources = self.resources
@@ -955,10 +950,7 @@ class DPAsyncMPClient(AsyncMPClient):
                 poller.register(first_req_rcv_socket, zmq.POLLIN)
 
                 while True:
-                    events = await poller.poll(timeout=1000)
-                    if events is None:
-                        logger.warning("Poller timed out")
-                        continue
+                    events = await poller.poll()
                     if not self.engines_running and len(events) == 2 or (
                             events[0][0] == first_req_rcv_socket):
                         # Send a message to notify the coordinator that
@@ -1116,7 +1108,7 @@ class RayDPClient(DPAsyncMPClient):
                 coordinator.get_engine_socket_addresses())
 
         # Start all engines.
-        self.resources.local_engine_manager = CoreEngineActorManager(
+        self.resources.engine_manager = CoreEngineActorManager(
             vllm_config=vllm_config,
             executor_class=executor_class,
             log_stats=log_stats,
