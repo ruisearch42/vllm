@@ -7,7 +7,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import Future
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from inspect import isclass, signature
 from logging import DEBUG
 from typing import Any, Callable, Optional, TypeVar, Union
@@ -403,6 +403,7 @@ class EngineCoreProc(EngineCore):
             daemon=True)
         self.output_thread.start()
 
+    @contextmanager
     def _perform_handshake(self, handshake_address: str, identity: bytes,
                            on_head_node: bool, vllm_config: VllmConfig):
         input_ctx = zmq.Context()
@@ -917,6 +918,7 @@ class DPEngineCoreActor(DPEngineCoreProc):
     def _decorate_logs(self):
         pass
 
+    @contextmanager
     def _perform_handshake(self, handshake_address: str, identity: bytes,
                            on_head_node: bool, vllm_config: VllmConfig):
         """
@@ -926,7 +928,16 @@ class DPEngineCoreActor(DPEngineCoreProc):
         vllm_config.parallel_config.data_parallel_rank = self.dp_rank
         vllm_config.parallel_config.data_parallel_rank_local = \
             self.local_dp_rank
-        return self.addresses
+        yield self.addresses
+
+    def _init_data_parallel(self, vllm_config: VllmConfig,
+                            has_coordinator: bool):
+        # Ray sets CUDA_VISIBLE_DEVICES to empty string,
+        # we clean this up to be able to properly initialize
+        # data parallel groups.
+        del os.environ['CUDA_VISIBLE_DEVICES']
+        # Set up data parallel environment.
+        super()._init_data_parallel(vllm_config, has_coordinator)
 
     def wait_for_init(self):
         """
