@@ -908,8 +908,9 @@ class DPEngineCoreActor(DPEngineCoreProc):
         local_dp_rank: int = 0,
     ):
         self.addresses = addresses
-        self.dp_rank = dp_rank
-        self.local_dp_rank = local_dp_rank
+        vllm_config.parallel_config.data_parallel_rank = dp_rank
+        vllm_config.parallel_config.data_parallel_rank_local = \
+            local_dp_rank
 
         # TODO(rui): improve shutdown handling
         super().__init__(vllm_config, on_head_node, "", executor_class,
@@ -925,9 +926,6 @@ class DPEngineCoreActor(DPEngineCoreProc):
         For Ray, we don't need to actually perform handshake.
         All information is known from the actor creation.
         """
-        vllm_config.parallel_config.data_parallel_rank = self.dp_rank
-        vllm_config.parallel_config.data_parallel_rank_local = \
-            self.local_dp_rank
         yield self.addresses
 
     def _init_data_parallel(self, vllm_config: VllmConfig,
