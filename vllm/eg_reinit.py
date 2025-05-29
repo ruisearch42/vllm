@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import os
 import time
 
 import ray
@@ -22,6 +23,18 @@ class DPActor:
         self.counter = 0
 
     def init_dp_group(self):
+        import torch.distributed as dist
+        del os.environ["CUDA_VISIBLE_DEVICES"]
+        distributed_init_method = f"tcp://{self.data_parallel_master_ip}:{self.data_parallel_port}"
+        dist.init_process_group(backend="nccl",
+                                init_method=distributed_init_method,
+                                world_size=self.data_parallel_size,
+                                rank=self.data_parallel_rank)
+
+        print("local_rank", self.data_parallel_rank)
+        print("world_size", self.data_parallel_size)
+        print("group_ranks", self.group_ranks)
+
         from vllm.distributed.parallel_state import init_model_parallel_group
         init_model_parallel_group(group_ranks=self.group_ranks,
                                   local_rank=self.data_parallel_rank,
@@ -71,7 +84,11 @@ def main():
     inits = []
     group_ranks = [[0, 1]]
     for i in range(2):
-        dp_actor = DPActor.remote("127.0.0.1", 50000, i, 2, group_ranks)
+        dp_actor = DPActor.remote(data_parallel_master_ip="127.0.0.1",
+                                  data_parallel_port=50000,
+                                  data_parallel_rank=i,
+                                  data_parallel_size=2,
+                                  group_ranks=group_ranks)
         actors.append(dp_actor)
         inits.append(dp_actor.init_dp_group.remote())
 
@@ -86,6 +103,7 @@ def main():
     print("Started workers")
 
     time.sleep(5)
+    return
 
     # Scaling up
     new_group_ranks = [[0, 1, 2]]
