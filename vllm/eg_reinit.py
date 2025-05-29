@@ -10,12 +10,23 @@ from torch.distributed import ReduceOp
 class DPActor:
 
     def __init__(self, data_parallel_master_ip: str, data_parallel_port: int,
-                 data_parallel_rank: int, data_parallel_size: int):
+                 data_parallel_rank: int, data_parallel_size: int,
+                 group_ranks: list[list[int]]):
         self.data_parallel_master_ip = data_parallel_master_ip
         self.data_parallel_port = data_parallel_port
         self.data_parallel_rank = data_parallel_rank
         self.data_parallel_size = data_parallel_size
+
+        self.group_ranks = group_ranks
+
         self.counter = 0
+
+    def init_dp_group(self):
+        from vllm.distributed.parallel_state import init_model_parallel_group
+        init_model_parallel_group(group_ranks=self.group_ranks,
+                                  local_rank=self.data_parallel_rank,
+                                  backend="nccl",
+                                  group_name="dp_group")
 
     def stateless_init_dp_group(self):
         from vllm.distributed.utils import (
@@ -47,6 +58,10 @@ class DPActor:
     def resize(self, new_size: int):
         self.data_parallel_size = new_size
 
+    def regroup(self, new_size: int, new_group_ranks: list[list[int]]):
+        self.data_parallel_size = new_size
+        self.group_ranks = new_group_ranks
+
 
 def main():
     """
@@ -54,10 +69,11 @@ def main():
     """
     actors = []
     inits = []
+    group_ranks = [[0, 1]]
     for i in range(2):
-        dp_actor = DPActor.remote("127.0.0.1", 50000, i, 2)
+        dp_actor = DPActor.remote("127.0.0.1", 50000, i, 2, group_ranks)
         actors.append(dp_actor)
-        inits.append(dp_actor.stateless_init_dp_group.remote())
+        inits.append(dp_actor.init_dp_group.remote())
 
     print("Created actors")
     ray.get(inits)
@@ -72,17 +88,18 @@ def main():
     time.sleep(5)
 
     # Scaling up
-    new_actor = DPActor.remote("127.0.0.1", 50000, 2, 3)
+    new_group_ranks = [[0, 1, 2]]
+    new_actor = DPActor.remote("127.0.0.1", 50000, 2, 3, new_group_ranks)
     print("Created new actor")
 
-    resizes = [actor.resize.remote(3) for actor in actors]
+    resizes = [actor.regroup.remote(3, new_group_ranks) for actor in actors]
     ray.get(resizes)
     print("Resized actors")
 
     new_group = actors + [new_actor]
     reinits = []
     for actor in new_group:
-        reinits.append(actor.stateless_init_dp_group.remote())
+        reinits.append(actor.init_dp_group.remote())
     ray.get(reinits)
     print("Renitialized actors")
 

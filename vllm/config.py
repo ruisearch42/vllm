@@ -17,7 +17,7 @@ from functools import cached_property
 from importlib.util import find_spec
 from pathlib import Path
 from typing import (TYPE_CHECKING, Any, Callable, ClassVar, Literal, Optional,
-                    Protocol, TypeVar, Union, cast, get_args, get_origin)
+                    Protocol, Type, TypeVar, Union, cast, get_args, get_origin)
 
 import regex as re
 import torch
@@ -1745,7 +1745,7 @@ class ParallelConfig:
     """ray distributed model workers placement group."""
 
     distributed_executor_backend: Optional[Union[DistributedExecutorBackend,
-                                                 type["ExecutorBase"]]] = None
+                                                 Type["ExecutorBase"]]] = None
     """Backend to use for distributed model
     workers, either "ray" or "mp" (multiprocessing). If the product
     of pipeline_parallel_size and tensor_parallel_size is less than
