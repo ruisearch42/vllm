@@ -23,7 +23,8 @@ class DPActor:
 
     def init_dp_group(self):
         import torch.distributed as dist
-        del os.environ["CUDA_VISIBLE_DEVICES"]
+        if "CUDA_VISIBLE_DEVICES" in os.environ:
+            del os.environ["CUDA_VISIBLE_DEVICES"]
         distributed_init_method = f"tcp://{self.data_parallel_master_ip}:{self.data_parallel_port}"
         dist.init_process_group(backend="nccl",
                                 init_method=distributed_init_method,
@@ -45,8 +46,7 @@ class DPActor:
     def do_work(self):
         self.counter = 0
         for _ in range(10):
-            val = self.counter * self.data_parallel_size \
-                + self.data_parallel_rank
+            val = self.counter * self.data_parallel_size
             tensor = torch.tensor([val], dtype=torch.int32, device=self.device)
             res = self.dp_group.all_reduce(tensor)
             aggregated_val = int(res.item())
@@ -90,8 +90,7 @@ def main():
     ray.get(works)
     print("Started workers")
 
-    time.sleep(5)
-    return
+    time.sleep(1)
 
     # Scaling up
     new_group_ranks = [[0, 1, 2]]
@@ -115,7 +114,7 @@ def main():
     ray.get(works)
     print("Restarted workers")
 
-    time.sleep(5)
+    time.sleep(1)
 
 
 if __name__ == "__main__":
