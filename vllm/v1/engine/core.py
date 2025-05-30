@@ -19,7 +19,10 @@ import zmq
 
 from vllm.config import ParallelConfig, VllmConfig
 from vllm.distributed import stateless_destroy_torch_distributed_process_group
+from vllm.distributed.utils import (
+    stateless_init_torch_distributed_process_group)
 from vllm.executor.multiproc_worker_utils import _add_prefix
+from vllm.executor.ray_distributed_executor import RayDistributedExecutor
 from vllm.logger import init_logger
 from vllm.logging_utils.dump_input import dump_engine_exception
 from vllm.lora.request import LoRARequest
@@ -163,6 +166,8 @@ class EngineCore:
         num_gpu_blocks = kv_cache_configs[0].num_blocks
         num_cpu_blocks = 0
         scheduler_kv_cache_config = kv_cache_configs[0]
+
+        self.kv_cache_configs = kv_cache_configs
 
         # Initialize kv cache and warmup the execution
         self.model_executor.initialize_from_config(kv_cache_configs)
@@ -781,6 +786,9 @@ class DPEngineCoreProc(EngineCoreProc):
         local_dp_rank = vllm_config.parallel_config.data_parallel_rank_local
 
         assert dp_size > 1
+        logger.info(
+            f"dp_rank {dp_rank}, dp_size {dp_size}, local_dp_rank {local_dp_rank}"
+        )
         assert 0 <= local_dp_rank <= dp_rank < dp_size
 
         if vllm_config.kv_transfer_config is not None:
@@ -959,3 +967,33 @@ class DPEngineCoreActor(DPEngineCoreProc):
             raise
         finally:
             self.shutdown()
+
+    def _reinit_data_parallel(self, new_dp_size: int):
+        logger.info(
+            f"Reinitializing data parallel with dp_size: {new_dp_size}")
+        from vllm.distributed.utils import (
+            stateless_destroy_torch_distributed_process_group)
+        stateless_destroy_torch_distributed_process_group(self.dp_group)
+        self.vllm_config.parallel_config.data_parallel_size = new_dp_size
+        self.dp_group = stateless_init_torch_distributed_process_group(
+            self.vllm_config.parallel_config.data_parallel_master_ip,
+            self.vllm_config.parallel_config.data_parallel_master_port,
+            self.vllm_config.parallel_config.data_parallel_rank,
+            new_dp_size,
+            backend="gloo")
+
+    def reinit(self, new_dp_size: int):
+        logger.info(f"Reinitializing engine core with dp_size: {new_dp_size}")
+        assert isinstance(self.model_executor, RayDistributedExecutor)
+        logger.info("assertion passed")
+        self.model_executor._reinit_workers_ray(new_dp_size)
+
+        # This is needed because we need to call get_dp_padding() on the old workers
+        # so that the EngineCore.init()|get_dp_padding()|all_reduce() can proceed
+        logger.info("Calling determine_available_memory()")
+        self.vllm_config.parallel_config.data_parallel_size = new_dp_size
+        self.model_executor.determine_available_memory()
+        logger.info("Calling initialize_from_config()")
+        self.model_executor.initialize_from_config(self.kv_cache_configs,
+                                                   reinit=True)
+        logger.info("initialize_from_config() called")

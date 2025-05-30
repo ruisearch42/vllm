@@ -429,6 +429,23 @@ class RayDistributedExecutor(DistributedExecutorBase):
             else:
                 self.non_driver_workers.append(worker)
 
+    def _reinit_workers_ray(self, new_dp_size: int):
+        """Re-initialize the workers in the Ray cluster.
+        """
+        logger.info("_reinit_workers_ray")
+
+        self.vllm_config.parallel_config.data_parallel_size = new_dp_size
+
+        logger.info("Before reinit_device")
+        self._run_workers("reinit_device", new_dp_size)
+
+        # NOTE: we can probably skip this step, if model is on the same device
+        # TODO: how to guarantee that?
+        # self._run_workers("load_model",
+        #             max_concurrent_workers=self.parallel_config.
+        #             max_parallel_loading_workers)
+        logger.info("_reinit_workers_ray done")
+
     def _driver_execute_model(
         self, execute_model_req: Optional[ExecuteModelRequest]
     ) -> Optional[List[SamplerOutput]]:
