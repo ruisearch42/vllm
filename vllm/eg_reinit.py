@@ -4,7 +4,6 @@ import time
 
 import ray
 import torch
-from torch.distributed import ReduceOp
 
 
 @ray.remote(num_gpus=1)
@@ -34,36 +33,25 @@ class DPActor:
         print("local_rank", self.data_parallel_rank)
         print("world_size", self.data_parallel_size)
         print("group_ranks", self.group_ranks)
+        self.device = torch.device(f"cuda:{self.data_parallel_rank}")
 
         from vllm.distributed.parallel_state import init_model_parallel_group
-        init_model_parallel_group(group_ranks=self.group_ranks,
-                                  local_rank=self.data_parallel_rank,
-                                  backend="nccl",
-                                  group_name="dp_group")
-
-    def stateless_init_dp_group(self):
-        from vllm.distributed.utils import (
-            stateless_init_torch_distributed_process_group)
-
-        self.dp_group = stateless_init_torch_distributed_process_group(
-            self.data_parallel_master_ip,
-            self.data_parallel_port,
-            self.data_parallel_rank,
-            self.data_parallel_size,
-            backend="gloo")
+        self.dp_group = init_model_parallel_group(
+            group_ranks=self.group_ranks,
+            local_rank=self.data_parallel_rank,
+            backend="nccl",
+            group_name="dp_group")
 
     def do_work(self):
         self.counter = 0
         for _ in range(10):
             val = self.counter * self.data_parallel_size \
                 + self.data_parallel_rank
-            tensor = torch.tensor([val], dtype=torch.int32, device="cpu")
-            torch.distributed.all_reduce(tensor,
-                                         op=ReduceOp.MIN,
-                                         group=self.dp_group)
-            aggregated_val = int(tensor.item())
-            print("Got value ", aggregated_val, " from rank ",
-                  self.data_parallel_rank)
+            tensor = torch.tensor([val], dtype=torch.int32, device=self.device)
+            res = self.dp_group.all_reduce(tensor)
+            aggregated_val = int(res.item())
+            print("value", val, "got aggregated value ", aggregated_val,
+                  " from rank ", self.data_parallel_rank)
             self.counter += 1
             # if self.data_parallel_rank == 0 and self.counter == 100:
             #     raise RuntimeError("failure")
