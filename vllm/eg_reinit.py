@@ -4,6 +4,7 @@ import time
 
 import ray
 import torch
+import torch.distributed as dist
 
 
 @ray.remote(num_gpus=1)
@@ -22,7 +23,6 @@ class DPActor:
         self.counter = 0
 
     def init_dp_group(self):
-        import torch.distributed as dist
         if "CUDA_VISIBLE_DEVICES" in os.environ:
             del os.environ["CUDA_VISIBLE_DEVICES"]
         distributed_init_method = f"tcp://{self.data_parallel_master_ip}:{self.data_parallel_port}"
@@ -43,6 +43,11 @@ class DPActor:
             backend="nccl",
             group_name="dp_group")
 
+    def reinit_dp_group(self):
+        self.dp_group.destroy()
+        dist.destroy_process_group()
+        self.init_dp_group()
+
     def do_work(self):
         self.counter = 0
         for _ in range(10):
@@ -56,10 +61,7 @@ class DPActor:
             # if self.data_parallel_rank == 0 and self.counter == 100:
             #     raise RuntimeError("failure")
 
-    def resize(self, new_size: int):
-        self.data_parallel_size = new_size
-
-    def regroup(self, new_size: int, new_group_ranks: list[list[int]]):
+    def resize(self, new_size: int, new_group_ranks: list[list[int]]):
         self.data_parallel_size = new_size
         self.group_ranks = new_group_ranks
 
@@ -97,19 +99,19 @@ def main():
     new_actor = DPActor.remote("127.0.0.1", 50000, 2, 3, new_group_ranks)
     print("Created new actor")
 
-    resizes = [actor.regroup.remote(3, new_group_ranks) for actor in actors]
+    resizes = [actor.resize.remote(3, new_group_ranks) for actor in actors]
     ray.get(resizes)
     print("Resized actors")
 
-    new_group = actors + [new_actor]
     reinits = []
-    for actor in new_group:
-        reinits.append(actor.init_dp_group.remote())
+    for actor in actors:
+        reinits.append(actor.reinit_dp_group.remote())
+    reinits.append(new_actor.init_dp_group.remote())
     ray.get(reinits)
-    print("Renitialized actors")
+    print("Reinitialized actors")
 
     works = []
-    for actor in new_group:
+    for actor in actors + [new_actor]:
         works.append(actor.do_work.remote())
     ray.get(works)
     print("Restarted workers")
