@@ -428,6 +428,18 @@ class RayDistributedExecutor(DistributedExecutorBase):
             else:
                 self.non_driver_workers.append(worker)
 
+    def _reinit_workers_ray(self, new_dp_size: int):
+        """Re-initialize the workers in the Ray cluster.
+        """
+
+        self.vllm_config.parallel_config.data_parallel_size = new_dp_size
+
+        self._run_workers("reinit_device")
+        self._run_workers("load_model",
+                    max_concurrent_workers=self.parallel_config.
+                    max_parallel_loading_workers)
+
+
     def _driver_execute_model(
         self, execute_model_req: Optional[ExecuteModelRequest]
     ) -> Optional[List[SamplerOutput]]:
