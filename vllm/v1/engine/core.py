@@ -542,7 +542,12 @@ class EngineCoreProc(EngineCore):
             if logger.isEnabledFor(DEBUG) and self.input_queue.empty():
                 logger.debug("EngineCore waiting for work.")
                 waited = True
-            req = self.input_queue.get()
+            try:
+                req = self.input_queue.get(timeout=5)
+            except queue.Empty:
+                logger.info("input queue is empty, reiniting")
+                self.reinit(2)
+                continue
             self._handle_client_request(*req)
 
         if waited:
@@ -961,5 +966,7 @@ class DPEngineCoreActor(DPEngineCoreProc):
             self.shutdown()
 
     def reinit(self, new_dp_size: int):
-        assert isinstance(self.executor, RayDistributedExecutor)
-        self.executor._reinit_workers_ray(new_dp_size)
+        logger.info(f"Reinitializing engine core with dp_size: {new_dp_size}")
+        assert isinstance(self.model_executor, RayDistributedExecutor)
+        logger.info("assertion passed")
+        self.model_executor._reinit_workers_ray(new_dp_size)
