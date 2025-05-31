@@ -448,6 +448,10 @@ class CoreEngineActorManager:
             ray.kill(actor)
         for pg in self.created_placement_groups:
             ray.util.remove_placement_group(pg)
+    
+    def reinit(self, new_dp_size: int):
+        for actor in self.local_engine_actors + self.remote_engine_actors:
+            actor.reinit.remote(new_dp_size)
 
 
 def wait_for_engine_startup(

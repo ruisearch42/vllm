@@ -14,6 +14,7 @@ from logging import DEBUG
 from typing import Any, Callable, Optional, TypeVar, Union
 
 import msgspec
+from vllm.executor.ray_distributed_executor import RayDistributedExecutor
 import zmq
 
 from vllm.config import ParallelConfig, VllmConfig
@@ -958,3 +959,7 @@ class DPEngineCoreActor(DPEngineCoreProc):
             raise
         finally:
             self.shutdown()
+
+    def reinit(self, new_dp_size: int):
+        assert isinstance(self.executor, RayDistributedExecutor)
+        self.executor._reinit_workers_ray(new_dp_size)
