@@ -1003,6 +1003,14 @@ if envs.VLLM_ALLOW_RUNTIME_LORA_UPDATING:
         return Response(status_code=200, content=response)
 
 
+@router.post("/reinit")
+async def reinit(raw_request: Request):
+    # get POST params
+    dp_size = raw_request.query_params.get("dp_size", "4")
+    await engine_client(raw_request).reinit(int(dp_size))
+    return Response(status_code=200)
+
+
 def build_app(args: Namespace) -> FastAPI:
     if args.disable_fastapi_docs:
         app = FastAPI(openapi_url=None,
