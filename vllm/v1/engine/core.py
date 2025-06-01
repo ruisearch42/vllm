@@ -960,6 +960,12 @@ class DPEngineCoreActor(DPEngineCoreProc):
             raise
         finally:
             self.shutdown()
+        
+    def _reinit_data_parallel(self, new_dp_size: int):
+        from vllm.distributed.utils import stateless_destroy_torch_distributed_process_group
+        stateless_destroy_torch_distributed_process_group(self.dp_group)
+        self.vllm_config.parallel_config.data_parallel_size = new_dp_size
+        self.dp_group = self.vllm_config.parallel_config.stateless_init_dp_group()
 
     def reinit(self, new_dp_size: int):
         logger.info(f"Reinitializing engine core with dp_size: {new_dp_size}")

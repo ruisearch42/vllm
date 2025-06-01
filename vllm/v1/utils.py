@@ -368,6 +368,7 @@ class CoreEngineActorManager:
             refs.append(actor.wait_for_init.remote())
 
         ray.get(refs)
+        logger.info("Created DP engine actors")
 
         # Simulate upscale DP
         new_dp_size = 4
@@ -391,7 +392,12 @@ class CoreEngineActorManager:
                           local_dp_rank=local_dp_rank)
             self.upscale_engine_actors.append(actor)
             new_refs.append(actor.wait_for_init.remote())
-        ray.get(new_refs)
+        
+        reinit_dp_refs = []
+        for actor in self.local_engine_actors + self.remote_engine_actors:
+            reinit_dp_refs.append(actor._reinit_data_parallel.remote(new_dp_size))
+        ray.get(new_refs + reinit_dp_refs)
+        logger.info("Created new DP ranks and reinitialized existing DP")
 
         new_init_refs = []
         for actor in self.upscale_engine_actors:
