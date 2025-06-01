@@ -314,6 +314,7 @@ class CoreEngineActorManager:
 
         self.local_engine_actors: list[ray.ActorHandle] = []
         self.remote_engine_actors: list[ray.ActorHandle] = []
+        self.upscale_engine_actors: list[ray.ActorHandle] = []
         dp_size = vllm_config.parallel_config.data_parallel_size
         local_engine_count = \
             vllm_config.parallel_config.data_parallel_size_local
@@ -368,14 +369,40 @@ class CoreEngineActorManager:
 
         ray.get(refs)
 
+        # Simulate upscale DP
+        new_refs = []
+        upscale_placement_groups, upscale_local_dp_ranks = \
+            self.create_upscale_placement_groups(vllm_config, 4)
+        for pg, local_dp_rank in zip(upscale_placement_groups, upscale_local_dp_ranks):
+            dp_vllm_config = copy.deepcopy(vllm_config)
+            # assumes this is on head node and all existing DP ranks are local
+            actor = ray.remote(DPEngineCoreActor).options(
+                scheduling_strategy=PlacementGroupSchedulingStrategy(
+                    placement_group=pg,
+                    placement_group_bundle_index=world_size,
+                )).remote(vllm_config=dp_vllm_config,
+                          executor_class=executor_class,
+                          log_stats=log_stats,
+                          on_head_node=True,
+                          addresses=addresses,
+                          dp_rank=local_dp_rank,
+                          local_dp_rank=local_dp_rank)
+            self.upscale_engine_actors.append(actor)
+            new_refs.append(actor.wait_for_init.remote())
+        ray.get(new_refs)
+
+        new_init_refs = []
+        for actor in self.upscale_engine_actors:
+            new_init_refs.append(actor.init.remote())
+
         reinit_refs = []
         self.run_refs = []
         for actor in self.local_engine_actors + self.remote_engine_actors:
             reinit_refs.append(actor.reinit.remote(2))
-        ray.get(reinit_refs)
-        logger.info("Reinitialized engine actors")
+        ray.get(reinit_refs + new_init_refs)
+        logger.info("Scaled up DP engine actors")
 
-        for actor in self.local_engine_actors + self.remote_engine_actors:
+        for actor in self.local_engine_actors + self.remote_engine_actors + self.upscale_engine_actors:
             self.run_refs.append(actor.run.remote())
 
     @staticmethod
@@ -444,6 +471,40 @@ class CoreEngineActorManager:
                     )
                     placement_groups.append(pg)
                     local_dp_ranks.append(i)
+        return placement_groups, local_dp_ranks
+    
+    def create_upscale_placement_groups(self, vllm_config: VllmConfig, new_dp_size: int):
+        import ray
+        from ray._private.state import available_resources_per_node
+        from ray.util.state import list_nodes
+        nodes = list_nodes()
+
+        available_resources = available_resources_per_node()
+        world_size = vllm_config.parallel_config.world_size
+        placement_groups: list[PlacementGroup] = []
+        local_dp_ranks: list[int] = []
+        dp_size = vllm_config.parallel_config.data_parallel_size
+        upscale_dp_size = new_dp_size - dp_size
+        assert upscale_dp_size > 0, (
+            "Upstream DP size must be greater than current DP size")
+
+        for node in nodes:
+            node_resources = available_resources[node.node_id]
+            available_engine_count = node_resources["GPU"] // world_size
+            for i in range(available_engine_count):
+                if len(placement_groups) == upscale_dp_size:
+                    break
+                bundles = [{"GPU": 1.0}] * world_size + [{"CPU": 1.0}]
+                pg = ray.util.placement_group(
+                    name=f"dp_rank_upscale_{len(placement_groups)}",
+                    strategy="STRICT_PACK",
+                    bundles=bundles,
+                )
+                placement_groups.append(pg)
+                # assumes this is on head node and all existing DP ranks are local
+                local_dp_ranks.append(dp_size + i)
+        assert len(placement_groups) == upscale_dp_size, (
+            "Number of upscale placement groups must match data parallel size")
         return placement_groups, local_dp_ranks
 
     def get_run_refs(self):
