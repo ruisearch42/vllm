@@ -396,18 +396,12 @@ class CoreEngineActorManager:
         reinit_dp_refs = []
         for actor in self.local_engine_actors + self.remote_engine_actors:
             reinit_dp_refs.append(actor._reinit_data_parallel.remote(new_dp_size))
-        ray.get(new_refs + reinit_dp_refs)
-        logger.info("Created new DP ranks and reinitialized existing DP")
-
-        new_init_refs = []
-        for actor in self.upscale_engine_actors:
-            new_init_refs.append(actor.init.remote())
 
         reinit_refs = []
         self.run_refs = []
         for actor in self.local_engine_actors + self.remote_engine_actors:
             reinit_refs.append(actor.reinit.remote(new_dp_size))
-        ray.get(reinit_refs + new_init_refs)
+        ray.get(new_refs + reinit_dp_refs + reinit_refs)
         logger.info("Scaled up DP engine actors")
 
         for actor in self.local_engine_actors + self.remote_engine_actors + self.upscale_engine_actors:

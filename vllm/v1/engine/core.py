@@ -14,6 +14,7 @@ from logging import DEBUG
 from typing import Any, Callable, Optional, TypeVar, Union
 
 import msgspec
+from vllm.distributed.utils import stateless_init_torch_distributed_process_group
 from vllm.executor.ray_distributed_executor import RayDistributedExecutor
 import zmq
 
@@ -962,10 +963,16 @@ class DPEngineCoreActor(DPEngineCoreProc):
             self.shutdown()
         
     def _reinit_data_parallel(self, new_dp_size: int):
+        logger.info(f"Reinitializing data parallel with dp_size: {new_dp_size}")
         from vllm.distributed.utils import stateless_destroy_torch_distributed_process_group
         stateless_destroy_torch_distributed_process_group(self.dp_group)
         self.vllm_config.parallel_config.data_parallel_size = new_dp_size
-        self.dp_group = self.vllm_config.parallel_config.stateless_init_dp_group()
+        self.dp_group = stateless_init_torch_distributed_process_group(
+            self.vllm_config.parallel_config.data_parallel_master_ip,
+            self.vllm_config.parallel_config.data_parallel_master_port,
+            self.vllm_config.parallel_config.data_parallel_rank,
+            new_dp_size,
+            backend="gloo")
 
     def reinit(self, new_dp_size: int):
         logger.info(f"Reinitializing engine core with dp_size: {new_dp_size}")

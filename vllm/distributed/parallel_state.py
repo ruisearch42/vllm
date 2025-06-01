@@ -931,8 +931,9 @@ def init_distributed_environment(
         rank = parallel_config.data_parallel_rank * world_size + rank
         # adjust the world size to take into account data parallelism
         world_size = parallel_config.world_size_across_dp
+        logger.info(f"data_parallel_size: {parallel_config.data_parallel_size}, world_size_across_dp: {world_size}")
         ip = parallel_config.data_parallel_master_ip
-        port = parallel_config.get_next_dp_init_port()
+        port = parallel_config.data_parallel_master_port + 5 # for worker we add 5
         distributed_init_method = f"tcp://{ip}:{port}"  # noqa
         logger.info(
             "Adjusting world_size=%d rank=%d distributed_init_method=%s for DP",

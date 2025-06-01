@@ -436,7 +436,7 @@ class RayDistributedExecutor(DistributedExecutorBase):
         self.vllm_config.parallel_config.data_parallel_size = new_dp_size
 
         logger.info("Before reinit_device")
-        self._run_workers("reinit_device")
+        self._run_workers("reinit_device", new_dp_size)
 
         # NOTE: we can probably skip this step, if model is on the same device
         # TODO: how to guarantee that?

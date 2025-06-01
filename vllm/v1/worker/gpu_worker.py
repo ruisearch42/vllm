@@ -9,7 +9,7 @@ import torch.distributed
 import torch.nn as nn
 
 import vllm.envs as envs
-from vllm.config import VllmConfig
+from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.device_allocator.cumem import CuMemAllocator
 from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment,
@@ -148,10 +148,12 @@ class Worker(WorkerBase):
             # If usage stat is enabled, collect relevant info.
             report_usage_stats(self.vllm_config)
     
-    def reinit_device(self):
-        reinit_worker_distributed_environment(self.vllm_config, self.rank,
-                                            self.distributed_init_method,
-                                            self.local_rank)
+    def reinit_device(self, new_dp_size: int):
+        with set_current_vllm_config(self.vllm_config):
+            reinit_worker_distributed_environment(self.vllm_config, self.rank,
+                                                self.distributed_init_method,
+                                                self.local_rank,
+                                                new_dp_size)
 
     # FIXME(youkaichao & ywang96): Use TorchDispatchMode instead of memory pool
     # to hijack tensor allocation.
@@ -365,16 +367,20 @@ def reinit_worker_distributed_environment(
     rank: int,
     distributed_init_method: Optional[str] = None,
     local_rank: int = -1,
+    new_dp_size: int = -1,
 ) -> None:
     """Re-initialize the distributed environment."""
     destroy_model_parallel()
     destroy_distributed_environment()
 
     parallel_config = vllm_config.parallel_config
+    parallel_config.data_parallel_size = new_dp_size
+    logger.info(f"reinit_worker_distributed_environment with dp_size: {parallel_config.data_parallel_size}")
     init_distributed_environment(parallel_config.world_size, rank,
                                  distributed_init_method, local_rank)
     ensure_model_parallel_initialized(parallel_config.tensor_parallel_size,
                                       parallel_config.pipeline_parallel_size)
+    logger.info("reinit_worker_distributed_environment done")
 
 
 def _check_if_gpu_supports_dtype(torch_dtype: torch.dtype):
