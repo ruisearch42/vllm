@@ -769,14 +769,18 @@ class GroupCoordinator:
 
     def destroy(self):
         if self.device_group is not None:
+            logger.info("Destroying device group")
             torch.distributed.destroy_process_group(self.device_group)
             self.device_group = None
         if self.cpu_group is not None:
+            logger.info("Destroying cpu group")
             torch.distributed.destroy_process_group(self.cpu_group)
             self.cpu_group = None
         if self.device_communicator is not None:
+            logger.info("Destroying device communicator")
             self.device_communicator.destroy()
         if self.mq_broadcaster is not None:
+            logger.info("Destroying mq broadcaster")
             self.mq_broadcaster = None
 
     def prepare_communication_buffer_for_model(self, model: torch.nn.Module):
@@ -1161,21 +1165,25 @@ def destroy_model_parallel():
     global _TP
 
     if _TP:
+        logger.info("Destroying tp group")
         _TP.destroy()
     _TP = None
 
     global _PP
     if _PP:
+        logger.info("Destroying pp group")
         _PP.destroy()
     _PP = None
 
     global _DP
     if _DP:
+        logger.info("Destroying dp group")
         _DP.destroy()
     _DP = None
 
     global _EP
     if _EP:
+        logger.info("Destroying ep group")
         _EP.destroy()
     _EP = None
 
@@ -1183,6 +1191,7 @@ def destroy_model_parallel():
 def destroy_distributed_environment():
     global _WORLD
     if _WORLD:
+        logger.info("Destroying world group")
         _WORLD.destroy()
     _WORLD = None
     if torch.distributed.is_initialized():
