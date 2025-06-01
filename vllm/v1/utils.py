@@ -370,11 +370,13 @@ class CoreEngineActorManager:
         ray.get(refs)
 
         # Simulate upscale DP
+        new_dp_size = 4
         new_refs = []
         upscale_placement_groups, upscale_local_dp_ranks = \
-            self.create_upscale_placement_groups(vllm_config, 4)
+            self.create_upscale_placement_groups(vllm_config, new_dp_size)
         for pg, local_dp_rank in zip(upscale_placement_groups, upscale_local_dp_ranks):
             dp_vllm_config = copy.deepcopy(vllm_config)
+            dp_vllm_config.parallel_config.data_parallel_size = new_dp_size
             # assumes this is on head node and all existing DP ranks are local
             actor = ray.remote(DPEngineCoreActor).options(
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
@@ -398,7 +400,7 @@ class CoreEngineActorManager:
         reinit_refs = []
         self.run_refs = []
         for actor in self.local_engine_actors + self.remote_engine_actors:
-            reinit_refs.append(actor.reinit.remote(2))
+            reinit_refs.append(actor.reinit.remote(new_dp_size))
         ray.get(reinit_refs + new_init_refs)
         logger.info("Scaled up DP engine actors")
 
@@ -490,7 +492,8 @@ class CoreEngineActorManager:
 
         for node in nodes:
             node_resources = available_resources[node.node_id]
-            available_engine_count = node_resources["GPU"] // world_size
+            available_engine_count = int(node_resources["GPU"]) // world_size
+            logger.info(f"Node {node.node_ip} has {node_resources} and engine count {available_engine_count}")
             for i in range(available_engine_count):
                 if len(placement_groups) == upscale_dp_size:
                     break
