@@ -367,7 +367,14 @@ class CoreEngineActorManager:
             refs.append(actor.wait_for_init.remote())
 
         ray.get(refs)
+
+        reinit_refs = []
         self.run_refs = []
+        for actor in self.local_engine_actors + self.remote_engine_actors:
+            reinit_refs.append(actor.reinit.remote(2))
+        ray.get(reinit_refs)
+        logger.info("Reinitialized engine actors")
+
         for actor in self.local_engine_actors + self.remote_engine_actors:
             self.run_refs.append(actor.run.remote())
 

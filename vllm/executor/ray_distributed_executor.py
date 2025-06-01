@@ -437,11 +437,13 @@ class RayDistributedExecutor(DistributedExecutorBase):
 
         logger.info("Before reinit_device")
         self._run_workers("reinit_device")
-        logger.info("After reinit_device")
-        self._run_workers("load_model",
-                    max_concurrent_workers=self.parallel_config.
-                    max_parallel_loading_workers)
-        logger.info("After load_model")
+
+        # NOTE: we can probably skip this step, if model is on the same device
+        # TODO: how to guarantee that?
+        # self._run_workers("load_model",
+        #             max_concurrent_workers=self.parallel_config.
+        #             max_parallel_loading_workers)
+        logger.info("_reinit_workers_ray done")
 
     def _driver_execute_model(
         self, execute_model_req: Optional[ExecuteModelRequest]

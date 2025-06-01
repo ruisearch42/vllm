@@ -542,12 +542,7 @@ class EngineCoreProc(EngineCore):
             if logger.isEnabledFor(DEBUG) and self.input_queue.empty():
                 logger.debug("EngineCore waiting for work.")
                 waited = True
-            try:
-                req = self.input_queue.get(timeout=5)
-            except queue.Empty:
-                logger.info("input queue is empty, reiniting")
-                self.reinit(2)
-                continue
+            req = self.input_queue.get()
             self._handle_client_request(*req)
 
         if waited:
