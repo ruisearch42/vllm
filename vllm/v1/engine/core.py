@@ -988,5 +988,5 @@ class DPEngineCoreActor(DPEngineCoreProc):
         self.vllm_config.parallel_config.data_parallel_size = new_dp_size
         self.model_executor.determine_available_memory()
         logger.info("Calling initialize_from_config()")
-        self.model_executor.initialize_from_config(self.kv_cache_configs)
+        self.model_executor.initialize_from_config(self.kv_cache_configs, reinit=True)
         logger.info("initialize_from_config() called")
