@@ -918,7 +918,7 @@ def init_distributed_environment(
     local_rank: int = -1,
     backend: str = "nccl",
 ):
-    logger.debug(
+    logger.info(
         "world_size=%d rank=%d local_rank=%d "
         "distributed_init_method=%s backend=%s", world_size, rank, local_rank,
         distributed_init_method, backend)
@@ -963,6 +963,7 @@ def init_distributed_environment(
     global _WORLD
     if _WORLD is None:
         ranks = list(range(torch.distributed.get_world_size()))
+        logger.info(f"init_world_group: ranks={ranks}, local_rank={local_rank}, backend={backend}")
         _WORLD = init_world_group(ranks, local_rank, backend)
     else:
         assert _WORLD.world_size == torch.distributed.get_world_size(), (

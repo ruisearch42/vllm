@@ -149,6 +149,7 @@ class Worker(WorkerBase):
             report_usage_stats(self.vllm_config)
     
     def reinit_device(self, new_dp_size: int):
+        logger.info(f"reinit_device: self.local_rank={self.local_rank}, self.rank={self.rank}, new_dp_size={new_dp_size}")
         with set_current_vllm_config(self.vllm_config):
             reinit_worker_distributed_environment(self.vllm_config, self.rank,
                                                 self.distributed_init_method,
