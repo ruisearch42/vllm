@@ -942,6 +942,8 @@ def init_distributed_environment(
         assert distributed_init_method is not None, (
             "distributed_init_method must be provided when initializing "
             "distributed environment")
+        logger.info(f"init_process_group: backend={backend}, " 
+                    f"init_method={distributed_init_method}, world_size={world_size}, rank={rank}")
         # this backend is used for WORLD
         torch.distributed.init_process_group(
             backend=backend,

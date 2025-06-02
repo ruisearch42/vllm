@@ -979,3 +979,9 @@ class DPEngineCoreActor(DPEngineCoreProc):
         assert isinstance(self.model_executor, RayDistributedExecutor)
         logger.info("assertion passed")
         self.model_executor._reinit_workers_ray(new_dp_size)
+
+        # This is needed because we need to call get_dp_padding() on the old workers
+        # so that the EngineCore.init()|get_dp_padding()|all_reduce() can proceed 
+        logger.info("Calling determine_available_memory()")
+        self.model_executor.determine_available_memory()
+        logger.info("determine_available_memory() called")
