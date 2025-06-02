@@ -165,6 +165,8 @@ class EngineCore:
         num_cpu_blocks = 0
         scheduler_kv_cache_config = kv_cache_configs[0]
 
+        self.kv_cache_configs = kv_cache_configs
+
         # Initialize kv cache and warmup the execution
         self.model_executor.initialize_from_config(kv_cache_configs)
 
@@ -982,7 +984,9 @@ class DPEngineCoreActor(DPEngineCoreProc):
 
         # This is needed because we need to call get_dp_padding() on the old workers
         # so that the EngineCore.init()|get_dp_padding()|all_reduce() can proceed 
-        logger.info("Calling _initialize_kv_caches()")
+        logger.info("Calling determine_available_memory()")
         self.vllm_config.parallel_config.data_parallel_size = new_dp_size
-        self._initialize_kv_caches(self.vllm_config)
-        logger.info("_initialize_kv_caches() called")
+        self.model_executor.determine_available_memory()
+        logger.info("Calling initialize_from_config()")
+        self.model_executor.initialize_from_config(self.kv_cache_configs)
+        logger.info("initialize_from_config() called")
