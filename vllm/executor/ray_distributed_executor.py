@@ -497,6 +497,7 @@ class RayDistributedExecutor(DistributedExecutorBase):
           rather than blocking on the results.
         - args/kwargs: All workers share the same args/kwargs
         """
+        logger.info(f"Running {method} on all workers")
         if isinstance(method, str):
             sent_method = method
         else:
