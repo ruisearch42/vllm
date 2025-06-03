@@ -159,6 +159,18 @@ class Worker(WorkerBase):
             reinit_worker_distributed_environment(self.vllm_config, self.rank,
                                                   self.distributed_init_method,
                                                   self.local_rank, new_dp_size)
+    
+    def destroy_dp_states(self):
+        logger.info("Destroying dp states")
+        destroy_model_parallel()
+        destroy_distributed_environment()
+
+    def reinit_dp_states(self, new_dp_size: int):
+        logger.info("Reinitializing dp states")
+        with set_current_vllm_config(self.vllm_config):
+            reinit_worker_distributed_environment(self.vllm_config, self.rank,
+                                                  self.distributed_init_method,
+                                                  self.local_rank, new_dp_size)
 
     # FIXME(youkaichao & ywang96): Use TorchDispatchMode instead of memory pool
     # to hijack tensor allocation.
@@ -375,9 +387,6 @@ def reinit_worker_distributed_environment(
     new_dp_size: int = -1,
 ) -> None:
     """Re-initialize the distributed environment."""
-    destroy_model_parallel()
-    destroy_distributed_environment()
-
     parallel_config = vllm_config.parallel_config
     parallel_config.data_parallel_size = new_dp_size
     logger.info(

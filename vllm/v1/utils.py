@@ -372,7 +372,14 @@ class CoreEngineActorManager:
         logger.info("Created DP engine actors")
 
         # Simulate upscale DP
+
         new_dp_size = 4
+
+        destroy_refs = []
+        for actor in self.local_engine_actors + self.remote_engine_actors:
+            destroy_refs.append(actor.destroy_dp_states.remote())
+        ray.get(destroy_refs)
+
         new_refs = []
         upscale_placement_groups, upscale_local_dp_ranks = \
             self.create_upscale_placement_groups(vllm_config, new_dp_size)
@@ -395,16 +402,11 @@ class CoreEngineActorManager:
             self.upscale_engine_actors.append(actor)
             new_refs.append(actor.wait_for_init.remote())
 
-        reinit_dp_refs = []
-        for actor in self.local_engine_actors + self.remote_engine_actors:
-            reinit_dp_refs.append(
-                actor._reinit_data_parallel.remote(new_dp_size))
-
         reinit_refs = []
         self.run_refs = []
         for actor in self.local_engine_actors + self.remote_engine_actors:
-            reinit_refs.append(actor.reinit.remote(new_dp_size))
-        ray.get(new_refs + reinit_dp_refs + reinit_refs)
+            reinit_refs.append(actor.reinit_dp_states.remote(new_dp_size))
+        ray.get(new_refs + reinit_refs)
         logger.info("Scaled up DP engine actors")
 
         for actor in self.local_engine_actors + self.remote_engine_actors + self.upscale_engine_actors:

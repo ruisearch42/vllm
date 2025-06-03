@@ -445,6 +445,14 @@ class RayDistributedExecutor(DistributedExecutorBase):
         #             max_concurrent_workers=self.parallel_config.
         #             max_parallel_loading_workers)
         logger.info("_reinit_workers_ray done")
+    
+    def destroy_dp_states(self):
+        logger.info("Destroying dp states")
+        self._run_workers("destroy_dp_states")
+    
+    def reinit_dp_states(self, new_dp_size: int):
+        logger.info("Reinitializing dp states")
+        self._run_workers("reinit_dp_states", new_dp_size)
 
     def _driver_execute_model(
         self, execute_model_req: Optional[ExecuteModelRequest]

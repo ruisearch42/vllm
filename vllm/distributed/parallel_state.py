@@ -1191,6 +1191,11 @@ def destroy_model_parallel():
     global _DP
     if _DP:
         logger.info("Destroying dp group")
+        logger.info(f"DP group: rank={_DP.rank_in_group}, "
+                    f"world_size={_DP.world_size}, "
+                    f"local_rank={_DP.local_rank}, "
+                    f"rank_in_group={_DP.rank_in_group}, "
+                    f"ranks={_DP.ranks}")
         _DP.destroy()
     _DP = None
 
