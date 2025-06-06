@@ -376,9 +376,14 @@ class CoreEngineActorManager:
         new_dp_size = 4
 
         destroy_refs = []
+        import time
+        start_destroy = time.time()
         for actor in self.local_engine_actors + self.remote_engine_actors:
             destroy_refs.append(actor.destroy_dp_states.remote())
         ray.get(destroy_refs)
+        finish_destroy = time.time()
+        logger.info(
+            f"Destroyed DP states in {finish_destroy - start_destroy} seconds")
 
         new_refs = []
         upscale_placement_groups, upscale_local_dp_ranks = \
@@ -407,6 +412,10 @@ class CoreEngineActorManager:
         for actor in self.local_engine_actors + self.remote_engine_actors:
             reinit_refs.append(actor.reinit_dp_states.remote(new_dp_size))
         ray.get(new_refs + reinit_refs)
+        finish_reinit = time.time()
+        logger.info(
+            f"Reinitialized DP states in {finish_reinit - finish_destroy} seconds"
+        )
         logger.info("Scaled up DP engine actors")
 
         for actor in self.local_engine_actors + self.remote_engine_actors + self.upscale_engine_actors:
