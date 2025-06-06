@@ -388,6 +388,10 @@ class CoreEngineActorManager:
         new_refs = []
         upscale_placement_groups, upscale_local_dp_ranks = \
             self.create_upscale_placement_groups(vllm_config, new_dp_size)
+        finish_pg = time.time()
+        logger.info(
+            f"Created new DP placement groups in {finish_pg - finish_destroy} seconds")
+
         for pg, local_dp_rank in zip(upscale_placement_groups,
                                      upscale_local_dp_ranks):
             dp_vllm_config = copy.deepcopy(vllm_config)
@@ -414,7 +418,7 @@ class CoreEngineActorManager:
         ray.get(new_refs + reinit_refs)
         finish_reinit = time.time()
         logger.info(
-            f"Reinitialized DP states in {finish_reinit - finish_destroy} seconds"
+            f"Reinitialized DP states in {finish_reinit - finish_pg} seconds"
         )
         logger.info("Scaled up DP engine actors")
 

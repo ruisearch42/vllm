@@ -76,7 +76,11 @@ class EngineCore:
         self.log_stats = log_stats
 
         # Setup Model.
+        import time
+        start_init_executor = time.time()
         self.model_executor = executor_class(vllm_config)
+        end_init_executor = time.time()
+        logger.info("init executor took %.2f seconds", end_init_executor - start_init_executor)
         if executor_fail_callback is not None:
             self.model_executor.register_failure_callback(
                 executor_fail_callback)
@@ -107,6 +111,7 @@ class EngineCore:
                 "compatibility may not be maintained.",
                 vllm_config.scheduler_config.scheduler_cls)
 
+        start_init_scheduler = time.time()
         self.scheduler: SchedulerInterface = Scheduler(
             vllm_config=vllm_config,
             kv_cache_config=kv_cache_config,
@@ -115,6 +120,8 @@ class EngineCore:
             > 1,
             log_stats=self.log_stats,
         )
+        end_init_scheduler = time.time()
+        logger.info("init scheduler took %.2f seconds", end_init_scheduler - start_init_scheduler)
 
         # Setup MM Input Mapper.
         self.mm_input_cache_server = MirroredProcessingCache(

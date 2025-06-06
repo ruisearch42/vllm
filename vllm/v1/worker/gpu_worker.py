@@ -167,10 +167,14 @@ class Worker(WorkerBase):
 
     def reinit_dp_states(self, new_dp_size: int):
         logger.info("Reinitializing dp states")
+        import time
+        start_reinit_dp_states = time.time()
         with set_current_vllm_config(self.vllm_config):
             reinit_worker_distributed_environment(self.vllm_config, self.rank,
                                                   self.distributed_init_method,
                                                   self.local_rank, new_dp_size)
+        end_reinit_dp_states = time.time()
+        logger.info("reinit dp states took %.2f seconds", end_reinit_dp_states - start_reinit_dp_states)
 
     # FIXME(youkaichao & ywang96): Use TorchDispatchMode instead of memory pool
     # to hijack tensor allocation.
@@ -368,11 +372,15 @@ def init_worker_distributed_environment(
 ) -> None:
     """Initialize the distributed environment."""
     parallel_config = vllm_config.parallel_config
+    import time
     set_custom_all_reduce(not parallel_config.disable_custom_all_reduce)
+
+    start_init_distributed_environment = time.time()
 
     init_distributed_environment(parallel_config.world_size, rank,
                                  distributed_init_method, local_rank)
-
+    end_init_distributed_environment = time.time()
+    logger.info("init distributed environment took %.2f seconds", end_init_distributed_environment - start_init_distributed_environment)    
     ensure_model_parallel_initialized(parallel_config.tensor_parallel_size,
                                       parallel_config.pipeline_parallel_size)
 

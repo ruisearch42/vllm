@@ -103,7 +103,11 @@ class RayDistributedExecutor(DistributedExecutorBase):
                 "VLLM_USE_RAY_COMPILED_DAG=1")
 
         assert self.uses_ray
+        import time
+        start_init_ray = time.time()
         initialize_ray_cluster(self.parallel_config)
+        end_init_ray = time.time()
+        logger.info("init ray took %.2f seconds", end_init_ray - start_init_ray)
         placement_group = self.parallel_config.placement_group
 
         # Disable Ray usage stats collection.
@@ -112,7 +116,10 @@ class RayDistributedExecutor(DistributedExecutorBase):
             os.environ["RAY_USAGE_STATS_ENABLED"] = "0"
 
         # Create the parallel GPU workers.
+        start_init_workers = time.time()
         self._init_workers_ray(placement_group)
+        end_init_workers = time.time()
+        logger.info("init workers took %.2f seconds", end_init_workers - start_init_workers)
 
         self.input_encoder = msgspec.msgpack.Encoder(enc_hook=encode_hook)
         self.output_decoder = msgspec.msgpack.Decoder(
@@ -157,6 +164,8 @@ class RayDistributedExecutor(DistributedExecutorBase):
 
     def _init_workers_ray(self, placement_group: "PlacementGroup",
                           **ray_remote_kwargs):
+        import time
+        start_init_workers_ray = time.time()
         num_gpus = envs.VLLM_RAY_PER_WORKER_GPUS
 
         # The driver dummy worker does not actually use any resources.
@@ -231,6 +240,8 @@ class RayDistributedExecutor(DistributedExecutorBase):
             each.worker.get_node_ip.remote()  # type: ignore[attr-defined]
             for each in worker_metadata
         ])
+        end_get_worker_ips = time.time()
+        logger.info("create workers took %.2f seconds", end_get_worker_ips - start_init_workers_ray)
 
         for each, ip in zip(worker_metadata, worker_ips):
             each.ip = ip
@@ -289,6 +300,8 @@ class RayDistributedExecutor(DistributedExecutorBase):
             for item in sorted_worker_metadata
         }
         self._run_workers("adjust_rank", rerank_mapping)
+        end_adjust_rank = time.time()
+        logger.info("adjust rank took %.2f seconds", end_adjust_rank - end_get_worker_ips)
 
         # Get the set of GPU IDs used on each node.
         worker_node_and_gpu_ids = []
@@ -364,6 +377,8 @@ class RayDistributedExecutor(DistributedExecutorBase):
 
         self._run_workers("update_environment_variables",
                           self._get_env_vars_to_be_updated())
+        end_update_environment_variables = time.time()
+        logger.info("update environment variables took %.2f seconds", end_update_environment_variables - end_adjust_rank)
 
         if len(node_gpus) == 1:
             # in single node case, we don't need to get the IP address.
@@ -392,11 +407,20 @@ class RayDistributedExecutor(DistributedExecutorBase):
             )
             all_kwargs.append(kwargs)
         self._run_workers("init_worker", all_kwargs)
+        end_init_worker = time.time()
+        logger.info("init worker took %.2f seconds", end_init_worker - end_update_environment_variables)
 
+        start_init_device = time.time()
         self._run_workers("init_device")
+        end_init_device = time.time()
+        logger.info("init device took %.2f seconds", end_init_device - start_init_device)
+
+        start_load_model = time.time()
         self._run_workers("load_model",
                           max_concurrent_workers=self.parallel_config.
                           max_parallel_loading_workers)
+        end_load_model = time.time()
+        logger.info("load model took %.2f seconds", end_load_model - start_load_model)
 
         if self.use_ray_spmd_worker:
             for pp_rank in range(self.parallel_config.pipeline_parallel_size):
