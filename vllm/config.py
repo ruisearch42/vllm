@@ -1897,7 +1897,7 @@ class ParallelConfig:
                 # use gloo since the engine process might not have cuda device
                 return stateless_init_torch_distributed_process_group(
                     self.data_parallel_master_ip,
-                    self.get_next_dp_init_port(),
+                    self.data_parallel_master_port,
                     self.data_parallel_rank,
                     self.data_parallel_size,
                     backend="gloo")
@@ -4773,7 +4773,8 @@ class VllmConfig:
             f"chunked_prefill_enabled={self.scheduler_config.chunked_prefill_enabled}, "  # noqa
             f"use_async_output_proc={self.model_config.use_async_output_proc}, "
             f"pooler_config={self.model_config.pooler_config!r}, "
-            f"compilation_config={self.compilation_config!r}")
+            f"compilation_config={self.compilation_config!r})"
+        )
 
 
 _current_vllm_config: Optional[VllmConfig] = None
