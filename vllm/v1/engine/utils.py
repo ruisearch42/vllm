@@ -557,46 +557,44 @@ class CoreEngineActorManager:
             ray.util.remove_placement_group(pg)
 
 
-def start_dp_engine_actor(
-    vllm_config: VllmConfig,
-    executor_class: type[Executor],
-    log_stats: bool,
-    addresses: EngineZmqAddresses,
-    dp_rank: int,
-    local_dp_rank: int,
-    placement_group: "PlacementGroup",
-) -> None:
-    import ray
-    from ray.runtime_env import RuntimeEnv
-    from ray.util.scheduling_strategies import (
-        PlacementGroupSchedulingStrategy)
+class SingleCoreEngineActorManager:
 
-    from vllm.v1.engine.core import DPEngineCoreActor
+    def __init__(self, vllm_config: VllmConfig, executor_class: type[Executor],
+                 log_stats: bool, addresses: EngineZmqAddresses, dp_rank: int,
+                 local_dp_rank: int, placement_group: "PlacementGroup"):
+        import ray
+        from ray.runtime_env import RuntimeEnv
+        from ray.util.scheduling_strategies import (
+            PlacementGroupSchedulingStrategy)
 
-    env_vars_set = get_env_vars_to_copy(destination="DPEngineCoreActor")
-    env_vars_dict = {
-        name: os.environ[name]
-        for name in env_vars_set if name in os.environ
-    }
-    runtime_env = RuntimeEnv(env_vars=env_vars_dict)
-    world_size = vllm_config.parallel_config.world_size
+        from vllm.v1.engine.core import DPEngineCoreActor
 
-    actor = ray.remote(DPEngineCoreActor).options(
-        scheduling_strategy=PlacementGroupSchedulingStrategy(
-            placement_group=placement_group,
-            placement_group_bundle_index=world_size,
-        ),
-        runtime_env=runtime_env).remote(
-            vllm_config=vllm_config,
-            executor_class=executor_class,
-            log_stats=log_stats,
-            local_client=True,
-            addresses=addresses,
-            dp_rank=dp_rank,
-            local_dp_rank=local_dp_rank)
-    logger.info("Starting DPEngineCoreActor %s", dp_rank)
-    ray.get(actor.wait_for_init.remote())
-    logger.info("Started DPEngineCoreActor %s", dp_rank)
+        env_vars_set = get_env_vars_to_copy(destination="DPEngineCoreActor")
+        env_vars_dict = {
+            name: os.environ[name]
+            for name in env_vars_set if name in os.environ
+        }
+        runtime_env = RuntimeEnv(env_vars=env_vars_dict)
+        world_size = vllm_config.parallel_config.world_size
+
+        # NOTE: we need to keep actor's reference alive, otherwise it
+        # will be killed by Ray.
+        self.actor = ray.remote(DPEngineCoreActor).options(
+            scheduling_strategy=PlacementGroupSchedulingStrategy(
+                placement_group=placement_group,
+                placement_group_bundle_index=world_size,
+            ),
+            runtime_env=runtime_env).remote(vllm_config=vllm_config,
+                                            executor_class=executor_class,
+                                            log_stats=log_stats,
+                                            local_client=True,
+                                            addresses=addresses,
+                                            dp_rank=dp_rank,
+                                            local_dp_rank=local_dp_rank)
+        logger.info("Starting DPEngineCoreActor %s", dp_rank)
+
+        ray.get(self.actor.run.remote())
+        logger.info("Started DPEngineCoreActor %s", dp_rank)
 
 
 @contextlib.contextmanager
@@ -676,8 +674,9 @@ def launch_core_engines(
         logger.info("Starting ray-based external data parallel backend")
         placement_group = parallel_config.placement_group
         from ray.util.placement_group import placement_group_table
-        logger.info("DP placement group: %s", placement_group_table(placement_group))
-        start_dp_engine_actor(
+        logger.info("DP placement group: %s",
+                    placement_group_table(placement_group))
+        engine_actor_manager = SingleCoreEngineActorManager(
             vllm_config=vllm_config,
             executor_class=executor_class,
             log_stats=log_stats,
@@ -685,7 +684,7 @@ def launch_core_engines(
             dp_rank=dp_rank,
             local_dp_rank=dp_rank,
             placement_group=placement_group)
-        yield None, coordinator, addresses
+        yield engine_actor_manager, coordinator, addresses
         return
 
     if offline_mode:

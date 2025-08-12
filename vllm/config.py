@@ -2097,7 +2097,14 @@ class ParallelConfig:
                 f"data_parallel_size_local ({self.data_parallel_size_local}) "
                 f"must be <= data_parallel_size ({self.data_parallel_size})")
 
-        if self.data_parallel_size > 1 or self.data_parallel_size_local == 0:
+        if self.data_parallel_backend == "ray-external":
+            logger.info(
+                "Using data parallel master port %s for ray-external"
+                "data parallel backend", self.data_parallel_master_port)
+            if self.data_parallel_size <= 1:
+                raise ValueError("data_parallel_size must be > 1 for "
+                                 "ray-external data parallel backend")
+        elif self.data_parallel_size > 1 or self.data_parallel_size_local == 0:
             # Data parallel was specified in the engine args.
             self.data_parallel_master_port = get_open_port()
             logger.info("Using data parallel master port %s",

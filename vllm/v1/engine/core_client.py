@@ -437,6 +437,7 @@ class MPClient(EngineCoreClient):
                                   or parallel_config.data_parallel_external_lb)
 
             num_ranks = dp_local_size if local_engines_only else dp_size
+            logger.info("num_ranks: %s", num_ranks)
             self.engine_ranks_managed = [dp_rank] if offline_mode else list(
                 range(dp_rank, dp_rank + num_ranks))
             assert parallel_config.data_parallel_size_local <= len(
