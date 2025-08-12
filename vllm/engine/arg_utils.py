@@ -299,6 +299,7 @@ class EngineArgs:
     data_parallel_size_local: Optional[int] = None
     data_parallel_address: Optional[str] = None
     data_parallel_rpc_port: Optional[int] = None
+    data_parallel_master_port: Optional[int] = None
     data_parallel_hybrid_lb: bool = False
     data_parallel_backend: str = ParallelConfig.data_parallel_backend
     enable_expert_parallel: bool = ParallelConfig.enable_expert_parallel
@@ -1112,7 +1113,7 @@ class EngineArgs:
         # DP address, used in multi-node case for torch distributed group
         # and ZMQ sockets.
         if self.data_parallel_address is None:
-            if self.data_parallel_backend == "ray":
+            if self.data_parallel_backend == "ray" or self.data_parallel_backend == "ray-external":
                 host_ip = get_ip()
                 logger.info(
                     "Using host IP %s as ray-based data parallel address",
@@ -1125,6 +1126,15 @@ class EngineArgs:
                 data_parallel_address = ParallelConfig.data_parallel_master_ip
         else:
             data_parallel_address = self.data_parallel_address
+
+        if self.data_parallel_master_port is not None:
+            if self.data_parallel_backend != "ray-external":
+                raise ValueError(
+                    "data_parallel_master_port is only supported for ray-external "
+                    "data parallel backend")
+            data_parallel_master_port = self.data_parallel_master_port
+        else:
+            data_parallel_master_port = ParallelConfig.data_parallel_master_port
 
         # This port is only used when there are remote data parallel engines,
         # otherwise the local IPC transport is used.
@@ -1161,6 +1171,7 @@ class EngineArgs:
             data_parallel_size_local=data_parallel_size_local,
             data_parallel_master_ip=data_parallel_address,
             data_parallel_rpc_port=data_parallel_rpc_port,
+            data_parallel_master_port=data_parallel_master_port,
             data_parallel_backend=self.data_parallel_backend,
             data_parallel_hybrid_lb=self.data_parallel_hybrid_lb,
             enable_expert_parallel=self.enable_expert_parallel,

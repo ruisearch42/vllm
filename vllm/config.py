@@ -2021,10 +2021,14 @@ class ParallelConfig:
         last_exc: Optional[Exception] = None
         for _ in range(max_retries):
             try:
+                port = self.get_next_dp_init_port()
+                logger.info(
+                    "Initializing data parallel group on master ip %s port %s",
+                    self.data_parallel_master_ip, port)
                 # use gloo since the engine process might not have cuda device
                 return stateless_init_torch_distributed_process_group(
                     self.data_parallel_master_ip,
-                    self.get_next_dp_init_port(),
+                    port,
                     self.data_parallel_rank,
                     self.data_parallel_size,
                     backend="gloo")
@@ -2096,6 +2100,8 @@ class ParallelConfig:
         if self.data_parallel_size > 1 or self.data_parallel_size_local == 0:
             # Data parallel was specified in the engine args.
             self.data_parallel_master_port = get_open_port()
+            logger.info("Using data parallel master port %s",
+                        self.data_parallel_master_port)
 
             if not (0 <= self.data_parallel_rank < self.data_parallel_size):
                 raise ValueError(
@@ -2108,6 +2114,8 @@ class ParallelConfig:
             self.data_parallel_rank_local = envs.VLLM_DP_RANK_LOCAL
             self.data_parallel_master_ip = envs.VLLM_DP_MASTER_IP
             self.data_parallel_master_port = envs.VLLM_DP_MASTER_PORT
+            logger.info("Using data parallel master port %s",
+                        self.data_parallel_master_port)
 
             if self.data_parallel_external_lb:
                 raise ValueError("data_parallel_external_lb can only "
@@ -2165,6 +2173,10 @@ class ParallelConfig:
             elif self.data_parallel_backend == "ray":
                 logger.info("Using ray distributed inference because "
                             "data_parallel_backend is ray")
+                backend = "ray"
+            elif self.data_parallel_backend == "ray-external":
+                logger.info("Using ray distributed inference because "
+                            "data_parallel_backend is ray-external")
                 backend = "ray"
             elif ray_found:
                 if self.placement_group:

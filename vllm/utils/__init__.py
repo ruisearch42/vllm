@@ -894,12 +894,16 @@ def get_open_port() -> int:
     """
     if "VLLM_DP_MASTER_PORT" in os.environ:
         dp_master_port = envs.VLLM_DP_MASTER_PORT
+        logger.info("Using VLLM_DP_MASTER_PORT %s", dp_master_port)
         reserved_port_range = range(dp_master_port, dp_master_port + 10)
         while True:
             candidate_port = _get_open_port()
             if candidate_port not in reserved_port_range:
                 return candidate_port
-    return _get_open_port()
+    logger.info("No VLLM_DP_MASTER_PORT found, using default port")
+    port = _get_open_port()
+    logger.info("Using default port %s", port)
+    return port
 
 
 def _get_open_port() -> int:
