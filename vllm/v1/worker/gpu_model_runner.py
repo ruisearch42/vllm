@@ -2507,6 +2507,9 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         gc.collect()
 
     def capture_model(self) -> None:
+        import os
+        os.environ["NCCL_DEBUG"]="INFO"
+        os.environ["NCCL_DEBUG_SUBSYS"]="PROXY,INIT,GRAPH"
         if not self.use_cuda_graph:
             logger.warning(
                 "Skipping CUDA graph capture. To turn on CUDA graph capture, "
@@ -2541,7 +2544,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             full_cg = self.full_cuda_graph
             # Only rank 0 should print progress bar during capture
             compilation_cases = reversed(self.cudagraph_batch_sizes)
-            if is_global_first_rank():
+            if True:
                 compilation_cases = tqdm(
                     list(compilation_cases),
                     disable=not self.load_config.use_tqdm_on_load,
