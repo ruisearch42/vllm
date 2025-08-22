@@ -55,6 +55,9 @@ class Worker(WorkerBase):
                          rank=rank,
                          distributed_init_method=distributed_init_method,
                          is_driver_worker=is_driver_worker)
+        import os
+        os.environ["NCCL_DEBUG"]="INFO"
+        os.environ["NCCL_DEBUG_SUBSYS"]="PROXY,INIT,GRAPH"
 
         if self.model_config.trust_remote_code:
             # note: lazy import to avoid importing torch before initializing

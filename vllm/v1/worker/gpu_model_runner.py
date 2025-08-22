@@ -2507,9 +2507,6 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         gc.collect()
 
     def capture_model(self) -> None:
-        import os
-        os.environ["NCCL_DEBUG"]="INFO"
-        os.environ["NCCL_DEBUG_SUBSYS"]="PROXY,INIT,GRAPH"
         if not self.use_cuda_graph:
             logger.warning(
                 "Skipping CUDA graph capture. To turn on CUDA graph capture, "
@@ -2551,11 +2548,13 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     desc="Capturing CUDA graph shapes")
             for num_tokens in compilation_cases:
                 # We skip EPLB here since we don't want to record dummy metrics
-                for _ in range(
+                for i in range(
                         self.compilation_config.cudagraph_num_of_warmups):
+                    logger.info(f"{num_tokens=}, warmup")
                     self._dummy_run(num_tokens,
                                     capture_attn_cudagraph=full_cg,
                                     skip_eplb=True)
+                logger.info(f"{num_tokens=}")
                 self._dummy_run(num_tokens,
                                 capture_attn_cudagraph=full_cg,
                                 skip_eplb=True)
