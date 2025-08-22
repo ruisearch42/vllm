@@ -115,6 +115,10 @@ class RayDistributedExecutor(DistributedExecutorBase):
         if not self.use_ray_compiled_dag:
             self.driver_exec_method = make_async(
                 self.driver_worker.execute_method)
+        
+        import os
+        logger.info("ray_distributed_executor env vars: " + "; ".join([f"{k}={v}" for k, v in os.environ.items()]))
+
 
     def shutdown(self) -> None:
         logger.info(

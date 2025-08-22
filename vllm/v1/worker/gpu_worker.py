@@ -56,8 +56,9 @@ class Worker(WorkerBase):
                          distributed_init_method=distributed_init_method,
                          is_driver_worker=is_driver_worker)
         import os
-        os.environ["NCCL_DEBUG"]="INFO"
-        os.environ["NCCL_DEBUG_SUBSYS"]="PROXY,INIT,GRAPH"
+        # os.environ["NCCL_DEBUG"]="INFO"
+        # os.environ["NCCL_DEBUG_SUBSYS"]="PROXY,INIT,GRAPH"
+        logger.info("Worker env vars: " + "; ".join([f"{k}={v}" for k, v in os.environ.items()]))
 
         if self.model_config.trust_remote_code:
             # note: lazy import to avoid importing torch before initializing
