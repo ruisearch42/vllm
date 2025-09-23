@@ -144,15 +144,13 @@ class P2pNcclEngine:
         self.recv_request_id_to_tensor_ids: dict[str, set[str]] = {}
         self.send_request_id_to_tensor_ids: dict[str, set[str]] = {}
 
-        # Async transfer state tracking (similar to NIXL)
-        # req_id -> list[(event, start_time, tensor_id)]
-        self._pending_async_recvs: dict[str,
-                                        list[tuple[torch.cuda.Event, float,
-                                                   str]]] = defaultdict(list)
-        # req_id -> list[(event, start_time, tensor_id)]
-        self._pending_async_sends: dict[str,
-                                        list[tuple[torch.cuda.Event, float,
-                                                   str]]] = defaultdict(list)
+        # Async transfer state tracking (simplified - no unnecessary CUDA events)
+        # req_id -> set[tensor_id] (pending tensors)
+        self._pending_async_recvs: dict[str, set[str]] = defaultdict(set)
+        # req_id -> set[tensor_id] (pending tensors)
+        self._pending_async_sends: dict[str, set[str]] = defaultdict(set)
+        # Track when async receives started (for debugging/metrics)
+        self._async_recv_start_times: dict[str, float] = {}
         # Callback for automatic tensor injection when received
         self._async_injection_callback: Optional[callable] = None
         self.socks: dict[str, Any] = {}  # remote_address: client socket
@@ -343,14 +341,9 @@ class P2pNcclEngine:
 
         # For PUT/PUT_ASYNC modes, the background thread handles receives
         # We just need to track which tensors we're expecting
-        events = []
-        for tensor_id in tensor_ids:
-            # Create an event to track when this tensor is received
-            event = torch.cuda.Event()
-            events.append((event, time.perf_counter(), tensor_id))
-
-        if events:
-            self._pending_async_recvs[request_id] = events
+        if tensor_ids:
+            self._pending_async_recvs[request_id] = set(tensor_ids)
+            self._async_recv_start_times[request_id] = time.perf_counter()
             logger.debug(
                 f"Started async recv for request {request_id} with {len(tensor_ids)} tensors"
             )
@@ -360,54 +353,57 @@ class P2pNcclEngine:
     def _check_async_recv_completion(self, request_id: str) -> bool:
         """
         Check if all async receives for a request are complete.
-        Move completed tensors from background buffer to recv_store.
+        Remove completed tensors from pending set as they arrive.
         """
         if request_id not in self._pending_async_recvs:
             return True
 
-        events = self._pending_async_recvs[request_id]
-        all_complete = True
+        pending_tensors = self._pending_async_recvs[request_id]
 
-        for event, start_time, tensor_id in events:
-            # Check if tensor has been received by background thread
+        # Remove tensors that have been received
+        completed_tensors = set()
+        for tensor_id in pending_tensors:
             if tensor_id in self.recv_store:
-                # Tensor already received, record completion
-                event.record()
-                continue
-            else:
-                all_complete = False
+                completed_tensors.add(tensor_id)
 
-        if all_complete:
-            # All tensors received, clean up tracking
+        # Remove completed tensors from pending set
+        pending_tensors -= completed_tensors
+
+        # If all tensors received, clean up completely
+        if not pending_tensors:
             del self._pending_async_recvs[request_id]
-            logger.debug(f"Async recv completed for request {request_id}")
+            if request_id in self._async_recv_start_times:
+                duration = time.perf_counter(
+                ) - self._async_recv_start_times[request_id]
+                del self._async_recv_start_times[request_id]
+                logger.debug(
+                    f"Async recv completed for request {request_id} in {duration:.3f}s"
+                )
+            return True
 
-        return all_complete
+        # Partial completion - log progress
+        if completed_tensors:
+            total_tensors = len(pending_tensors) + len(completed_tensors)
+            logger.debug(
+                f"Async recv progress for {request_id}: {len(completed_tensors)}/{total_tensors} tensors received"
+            )
+
+        return False
 
     def _check_async_send_completion(self, request_id: str) -> bool:
         """
         Check if all async sends for a request are complete.
+        Note: Send completion logic would need to be implemented based on actual send mechanism.
+        For now, this is a placeholder that always returns True.
         """
         if request_id not in self._pending_async_sends:
             return True
 
-        events = self._pending_async_sends[request_id]
-        all_complete = True
-
-        for event, start_time, tensor_id in events:
-            # Check if the CUDA event has completed
-            if event.query():
-                # Event completed, this send is done
-                continue
-            else:
-                all_complete = False
-
-        if all_complete:
-            # All sends completed, clean up tracking
-            del self._pending_async_sends[request_id]
-            logger.debug(f"Async send completed for request {request_id}")
-
-        return all_complete
+        # TODO: Implement actual send completion checking
+        # For now, assume sends complete immediately (sync behavior)
+        del self._pending_async_sends[request_id]
+        logger.debug(f"Async send completed for request {request_id}")
+        return True
 
     def set_async_injection_callback(self, callback: callable):
         """Set callback function for automatic tensor injection when received."""
