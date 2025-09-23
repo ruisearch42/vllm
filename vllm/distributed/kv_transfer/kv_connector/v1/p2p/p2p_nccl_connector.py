@@ -79,6 +79,9 @@ class P2pNcclConnector(KVConnectorBase_V1):
         self._async_layer_info: dict[str, dict[str, tuple[torch.Tensor,
                                                           torch.Tensor]]] = {}
 
+        # Determine async mode once at init time
+        self._use_async_transfers = self._get_async_mode_from_config()
+
         self._rank = get_world_group().rank \
             if role == KVConnectorRole.WORKER else 0
         self._local_rank = get_world_group().local_rank \
@@ -186,8 +189,8 @@ class P2pNcclConnector(KVConnectorBase_V1):
         if metadata is None:
             return
 
-        # Check if we should use async mode
-        use_async = self._should_use_async_mode(metadata)
+        # Use async mode determined at init time
+        use_async = self._use_async_transfers
 
         # Load the KV for each request each layer
         for request in metadata.requests:
@@ -215,21 +218,18 @@ class P2pNcclConnector(KVConnectorBase_V1):
                 # Start async receive tracking
                 tensor_ids = list(self._get_pending_tensor_ids(request_id))
                 if tensor_ids:
-                    success = self.p2p_nccl_engine.start_async_recv(
-                        request_id, tensor_ids)
-                    if success:
+                    try:
+                        self.p2p_nccl_engine.start_async_recv(
+                            request_id, tensor_ids)
                         logger.debug(
                             f"Started async recv for request {request_id} with {len(tensor_ids)} tensors"
                         )
-                    else:
-                        # Fall back to sync mode if async failed
-                        logger.warning(
-                            f"Async recv failed for {request_id}, falling back to sync"
-                        )
+                    except (RuntimeError, ValueError) as e:
+                        # Clean up and re-raise with context
                         self._clear_async_layer_info(request_id)
-                        self._load_kv_sync(request, forward_context,
-                                           remote_address,
-                                           inject_kv_into_layer)
+                        raise RuntimeError(
+                            f"Failed to start async recv for request {request_id}: {e}"
+                        ) from e
                 else:
                     logger.debug(
                         f"No tensors to receive for request {request_id}")
@@ -238,19 +238,29 @@ class P2pNcclConnector(KVConnectorBase_V1):
                 self._load_kv_sync(request, forward_context, remote_address,
                                    inject_kv_into_layer)
 
-    def _should_use_async_mode(self, metadata) -> bool:
-        """Determine if we should use async mode based on request characteristics."""
-        # Use async mode if we have multiple requests or large transfers
-        if len(metadata.requests) > 1:
-            return True
+    def _get_async_mode_from_config(self) -> bool:
+        """Get async mode setting from kv_connector_extra_config (called once at init)."""
+        if self.config is None:
+            logger.info("P2P NCCL: No config found, using sync mode")
+            return False
 
-        # Check if any request has significant external tokens
-        for request in metadata.requests:
-            if hasattr(request,
-                       'kv_transfer_params') and request.kv_transfer_params:
-                return True
+        # Check for async mode in extra config
+        extra_config = getattr(self.config, 'kv_connector_extra_config', {})
+        if extra_config is None:
+            extra_config = {}
 
-        return False
+        # Default to False (sync mode) for backward compatibility
+        async_mode = extra_config.get('enable_async_transfers', False)
+
+        logger.info(
+            f"P2P NCCL connector initialized with async_transfers={async_mode}"
+        )
+        return async_mode
+
+    @property
+    def use_async_transfers(self) -> bool:
+        """Get the current async transfer mode (read-only)."""
+        return self._use_async_transfers
 
     def _load_kv_sync(self, request, forward_context, remote_address: str,
                       inject_kv_into_layer):

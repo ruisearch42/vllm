@@ -221,9 +221,13 @@ class P2pNcclEngine:
                     try:
                         self._async_injection_callback(tensor_id, tensor)
                     except Exception as e:
-                        logger.warning(
-                            f"Async injection callback failed for {tensor_id}: {e}"
-                        )
+                        logger.error(
+                            f"Async injection callback failed for {tensor_id}: {e}. "
+                            f"This may cause missing KV data for inference!")
+                        # Re-raise to prevent silent data corruption
+                        raise RuntimeError(
+                            f"Critical error: async tensor injection failed for {tensor_id}"
+                        ) from e
             return True
 
         item = SendQueueItem(tensor_id=tensor_id,
@@ -330,25 +334,31 @@ class P2pNcclEngine:
 
         return tensor
 
-    def start_async_recv(self, request_id: str, tensor_ids: list[str]) -> bool:
+    def start_async_recv(self, request_id: str, tensor_ids: list[str]) -> None:
         """
         Start async receive operations for a request.
-        Returns True if async operations were initiated successfully.
+        Raises RuntimeError if async operations cannot be started.
         """
         if self.send_type == "GET":
             # GET mode doesn't support async - would need to be implemented separately
-            return False
+            raise RuntimeError(
+                f"Async transfers not supported with send_type='{self.send_type}'. "
+                f"Async transfers require PUT or PUT_ASYNC mode. "
+                f"Please configure kv_connector_extra_config with appropriate send_type."
+            )
+
+        if not tensor_ids:
+            raise ValueError(
+                f"Cannot start async recv for request {request_id}: no tensor_ids provided"
+            )
 
         # For PUT/PUT_ASYNC modes, the background thread handles receives
         # We just need to track which tensors we're expecting
-        if tensor_ids:
-            self._pending_async_recvs[request_id] = set(tensor_ids)
-            self._async_recv_start_times[request_id] = time.perf_counter()
-            logger.debug(
-                f"Started async recv for request {request_id} with {len(tensor_ids)} tensors"
-            )
-            return True
-        return False
+        self._pending_async_recvs[request_id] = set(tensor_ids)
+        self._async_recv_start_times[request_id] = time.perf_counter()
+        logger.debug(
+            f"Started async recv for request {request_id} with {len(tensor_ids)} tensors"
+        )
 
     def _check_async_recv_completion(self, request_id: str) -> bool:
         """
@@ -471,9 +481,14 @@ class P2pNcclEngine:
                         try:
                             self._async_injection_callback(tensor_id, tensor)
                         except Exception as e:
-                            logger.warning(
-                                f"Async injection callback failed for {tensor_id}: {e}"
+                            logger.error(
+                                f"Async injection callback failed for {tensor_id}: {e}. "
+                                f"This may cause missing KV data for inference!"
                             )
+                            # Re-raise to prevent silent data corruption
+                            raise RuntimeError(
+                                f"Critical error: async tensor injection failed for {tensor_id}"
+                            ) from e
 
             elif data["cmd"] == "GET":
                 tensor_id = data["tensor_id"]
