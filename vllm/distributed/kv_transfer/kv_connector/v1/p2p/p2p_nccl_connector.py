@@ -74,6 +74,11 @@ class P2pNcclConnector(KVConnectorBase_V1):
         self.is_producer = self.config.is_kv_producer
         self.chunked_prefill: dict[str, Any] = {}
 
+        # Async layer injection tracking
+        # req_id -> {tensor_id: (layer_tensor, block_ids)}
+        self._async_layer_info: dict[str, dict[str, tuple[torch.Tensor,
+                                                          torch.Tensor]]] = {}
+
         self._rank = get_world_group().rank \
             if role == KVConnectorRole.WORKER else 0
         self._local_rank = get_world_group().local_rank \
@@ -85,6 +90,11 @@ class P2pNcclConnector(KVConnectorBase_V1):
             hostname="",
             port_offset=self._rank,
         ) if role == KVConnectorRole.WORKER else None
+
+        # Set up async injection callback for automatic tensor injection
+        if self.p2p_nccl_engine is not None:
+            self.p2p_nccl_engine.set_async_injection_callback(
+                self._inject_async_tensor)
 
     # ==============================
     # Worker-side methods
@@ -176,32 +186,147 @@ class P2pNcclConnector(KVConnectorBase_V1):
         if metadata is None:
             return
 
+        # Check if we should use async mode
+        use_async = self._should_use_async_mode(metadata)
+
         # Load the KV for each request each layer
         for request in metadata.requests:
             request_id = request.request_id
             ip, port = self.parse_request_id(request_id, False)
             remote_address = ip + ":" + str(port + self._rank)
-            for layer_name in forward_context.no_compile_layers:
-                layer = forward_context.no_compile_layers[layer_name]
 
-                # Only process layers that have kv_cache
-                # attribute (attention layers) Skip non-attention
-                # layers like FusedMoE
-                kv_cache = getattr(layer, 'kv_cache', None)
-                if kv_cache is None:
-                    continue
+            if use_async:
+                # Async mode: set up async receives but don't wait for completion
+                # The tensors will be injected when they arrive via the background thread
+                for layer_name in forward_context.no_compile_layers:
+                    layer = forward_context.no_compile_layers[layer_name]
+                    kv_cache = getattr(layer, 'kv_cache', None)
+                    if kv_cache is None:
+                        continue
 
-                layer = kv_cache[forward_context.virtual_engine]
+                    layer_tensor = kv_cache[forward_context.virtual_engine]
+                    tensor_id = request.request_id + "#" + layer_name
 
-                kv_cache = self.p2p_nccl_engine.recv_tensor(
-                    request.request_id + "#" + layer_name, remote_address)
+                    # Store the layer reference for later injection when tensor arrives
+                    self._store_async_layer_info(request_id, tensor_id,
+                                                 layer_tensor,
+                                                 request.block_ids)
 
-                if kv_cache is None:
-                    logger.warning("🚧kv_cache is None, %s", request.request_id)
-                    continue
+                # Start async receive tracking
+                tensor_ids = list(self._get_pending_tensor_ids(request_id))
+                if tensor_ids:
+                    success = self.p2p_nccl_engine.start_async_recv(
+                        request_id, tensor_ids)
+                    if success:
+                        logger.debug(
+                            f"Started async recv for request {request_id} with {len(tensor_ids)} tensors"
+                        )
+                    else:
+                        # Fall back to sync mode if async failed
+                        logger.warning(
+                            f"Async recv failed for {request_id}, falling back to sync"
+                        )
+                        self._clear_async_layer_info(request_id)
+                        self._load_kv_sync(request, forward_context,
+                                           remote_address,
+                                           inject_kv_into_layer)
+                else:
+                    logger.debug(
+                        f"No tensors to receive for request {request_id}")
+            else:
+                # Sync mode: original behavior
+                self._load_kv_sync(request, forward_context, remote_address,
+                                   inject_kv_into_layer)
 
-                inject_kv_into_layer(layer, kv_cache, request.block_ids,
-                                     request.request_id)
+    def _should_use_async_mode(self, metadata) -> bool:
+        """Determine if we should use async mode based on request characteristics."""
+        # Use async mode if we have multiple requests or large transfers
+        if len(metadata.requests) > 1:
+            return True
+
+        # Check if any request has significant external tokens
+        for request in metadata.requests:
+            if hasattr(request,
+                       'kv_transfer_params') and request.kv_transfer_params:
+                return True
+
+        return False
+
+    def _load_kv_sync(self, request, forward_context, remote_address: str,
+                      inject_kv_into_layer):
+        """Synchronous KV loading."""
+        for layer_name in forward_context.no_compile_layers:
+            layer = forward_context.no_compile_layers[layer_name]
+
+            # Only process layers that have kv_cache
+            # attribute (attention layers) Skip non-attention
+            # layers like FusedMoE
+            kv_cache = getattr(layer, 'kv_cache', None)
+            if kv_cache is None:
+                continue
+
+            layer = kv_cache[forward_context.virtual_engine]
+
+            kv_cache = self.p2p_nccl_engine.recv_tensor(
+                request.request_id + "#" + layer_name, remote_address)
+
+            if kv_cache is None:
+                logger.warning("🚧kv_cache is None, %s", request.request_id)
+                continue
+
+            inject_kv_into_layer(layer, kv_cache, request.block_ids,
+                                 request.request_id)
+
+    def _store_async_layer_info(self, request_id: str, tensor_id: str,
+                                layer_tensor: torch.Tensor,
+                                block_ids: torch.Tensor):
+        """Store layer information for async injection when tensor arrives."""
+        if request_id not in self._async_layer_info:
+            self._async_layer_info[request_id] = {}
+        self._async_layer_info[request_id][tensor_id] = (layer_tensor,
+                                                         block_ids)
+
+    def _get_pending_tensor_ids(self, request_id: str) -> set[str]:
+        """Get tensor IDs that are pending for a request."""
+        return set(self._async_layer_info.get(request_id, {}).keys())
+
+    def _clear_async_layer_info(self, request_id: str):
+        """Clear async layer info for a request."""
+        self._async_layer_info.pop(request_id, None)
+
+    def _inject_async_tensor(self, tensor_id: str,
+                             received_tensor: torch.Tensor):
+        """Inject a received tensor into the appropriate layer."""
+        # Find which request this tensor belongs to
+        for request_id, tensor_info in self._async_layer_info.items():
+            if tensor_id in tensor_info:
+                layer_tensor, block_ids = tensor_info[tensor_id]
+
+                # Inject the tensor using the same logic as sync mode
+                if received_tensor.dim() == 3:
+                    # MLA or FlashInfer backend: index along first dimension
+                    layer_tensor[block_ids] = received_tensor
+                elif received_tensor.dim() == 4:
+                    # FlashAttention backend: index along second dimension
+                    layer_tensor[:, block_ids] = received_tensor
+                else:
+                    logger.error(
+                        f"Unsupported KV cache tensor dimension: {received_tensor.dim()}"
+                    )
+                    return False
+
+                # Remove from pending
+                del tensor_info[tensor_id]
+                logger.debug(f"Injected async tensor {tensor_id} into layer")
+
+                # Clean up if no more tensors pending for this request
+                if not tensor_info:
+                    del self._async_layer_info[request_id]
+
+                return True
+
+        logger.warning(f"No pending layer info found for tensor {tensor_id}")
+        return False
 
     def wait_for_layer_load(self, layer_name: str) -> None:
         """Blocking until the KV for a specific layer is loaded into vLLM's
@@ -332,7 +457,9 @@ class P2pNcclConnector(KVConnectorBase_V1):
         if num_external_tokens < 0:
             num_external_tokens = 0
 
-        return num_external_tokens, False
+        # Enable async transfers when we have tokens to load
+        can_async = num_external_tokens > 0 and not self.is_producer
+        return num_external_tokens, can_async
 
     def update_state_after_alloc(self, request: "Request",
                                  blocks: "KVCacheBlocks",

@@ -6,7 +6,7 @@ import os
 import threading
 import time
 import typing
-from collections import deque
+from collections import defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -143,6 +143,18 @@ class P2pNcclEngine:
         self.recv_store: dict[str, Any] = {}
         self.recv_request_id_to_tensor_ids: dict[str, set[str]] = {}
         self.send_request_id_to_tensor_ids: dict[str, set[str]] = {}
+
+        # Async transfer state tracking (similar to NIXL)
+        # req_id -> list[(event, start_time, tensor_id)]
+        self._pending_async_recvs: dict[str,
+                                        list[tuple[torch.cuda.Event, float,
+                                                   str]]] = defaultdict(list)
+        # req_id -> list[(event, start_time, tensor_id)]
+        self._pending_async_sends: dict[str,
+                                        list[tuple[torch.cuda.Event, float,
+                                                   str]]] = defaultdict(list)
+        # Callback for automatic tensor injection when received
+        self._async_injection_callback: Optional[callable] = None
         self.socks: dict[str, Any] = {}  # remote_address: client socket
         self.comms: dict[str, Any] = {}  # remote_address: (ncclComm_t, rank)
 
@@ -205,6 +217,15 @@ class P2pNcclEngine:
             with self.recv_store_cv:
                 self.recv_store[tensor_id] = tensor
                 self.recv_store_cv.notify()
+
+                # Trigger async injection if callback is set
+                if self._async_injection_callback:
+                    try:
+                        self._async_injection_callback(tensor_id, tensor)
+                    except Exception as e:
+                        logger.warning(
+                            f"Async injection callback failed for {tensor_id}: {e}"
+                        )
             return True
 
         item = SendQueueItem(tensor_id=tensor_id,
@@ -311,6 +332,87 @@ class P2pNcclEngine:
 
         return tensor
 
+    def start_async_recv(self, request_id: str, tensor_ids: list[str]) -> bool:
+        """
+        Start async receive operations for a request.
+        Returns True if async operations were initiated successfully.
+        """
+        if self.send_type == "GET":
+            # GET mode doesn't support async - would need to be implemented separately
+            return False
+
+        # For PUT/PUT_ASYNC modes, the background thread handles receives
+        # We just need to track which tensors we're expecting
+        events = []
+        for tensor_id in tensor_ids:
+            # Create an event to track when this tensor is received
+            event = torch.cuda.Event()
+            events.append((event, time.perf_counter(), tensor_id))
+
+        if events:
+            self._pending_async_recvs[request_id] = events
+            logger.debug(
+                f"Started async recv for request {request_id} with {len(tensor_ids)} tensors"
+            )
+            return True
+        return False
+
+    def _check_async_recv_completion(self, request_id: str) -> bool:
+        """
+        Check if all async receives for a request are complete.
+        Move completed tensors from background buffer to recv_store.
+        """
+        if request_id not in self._pending_async_recvs:
+            return True
+
+        events = self._pending_async_recvs[request_id]
+        all_complete = True
+
+        for event, start_time, tensor_id in events:
+            # Check if tensor has been received by background thread
+            if tensor_id in self.recv_store:
+                # Tensor already received, record completion
+                event.record()
+                continue
+            else:
+                all_complete = False
+
+        if all_complete:
+            # All tensors received, clean up tracking
+            del self._pending_async_recvs[request_id]
+            logger.debug(f"Async recv completed for request {request_id}")
+
+        return all_complete
+
+    def _check_async_send_completion(self, request_id: str) -> bool:
+        """
+        Check if all async sends for a request are complete.
+        """
+        if request_id not in self._pending_async_sends:
+            return True
+
+        events = self._pending_async_sends[request_id]
+        all_complete = True
+
+        for event, start_time, tensor_id in events:
+            # Check if the CUDA event has completed
+            if event.query():
+                # Event completed, this send is done
+                continue
+            else:
+                all_complete = False
+
+        if all_complete:
+            # All sends completed, clean up tracking
+            del self._pending_async_sends[request_id]
+            logger.debug(f"Async send completed for request {request_id}")
+
+        return all_complete
+
+    def set_async_injection_callback(self, callback: callable):
+        """Set callback function for automatic tensor injection when received."""
+        self._async_injection_callback = callback
+
     def listen_for_requests(self):
         while True:
             socks = dict(self.poller.poll())
@@ -367,6 +469,15 @@ class P2pNcclEngine:
                     self.recv_store[tensor_id] = tensor
                     self.have_received_tensor_id(tensor_id)
                     self.recv_store_cv.notify()
+
+                    # Trigger async injection if callback is set
+                    if self._async_injection_callback:
+                        try:
+                            self._async_injection_callback(tensor_id, tensor)
+                        except Exception as e:
+                            logger.warning(
+                                f"Async injection callback failed for {tensor_id}: {e}"
+                            )
 
             elif data["cmd"] == "GET":
                 tensor_id = data["tensor_id"]
@@ -494,11 +605,22 @@ class P2pNcclEngine:
                         addr, _, _ = tensor
                         self.pool.free(addr)
 
-        # TODO:Retrieve requests that have already sent the KV cache.
+        # Check for completed async sends
         finished_sending: set[str] = set()
+        for req_id in list(self._pending_async_sends.keys()):
+            if self._check_async_send_completion(req_id):
+                finished_sending.add(req_id)
 
-        # TODO:Retrieve requests that have already received the KV cache.
+        # Check for completed async receives
         finished_recving: set[str] = set()
+        for req_id in list(self._pending_async_recvs.keys()):
+            if self._check_async_recv_completion(req_id):
+                finished_recving.add(req_id)
+
+        if finished_sending or finished_recving:
+            logger.debug(
+                f"Async transfers completed - sending: {finished_sending}, recving: {finished_recving}"
+            )
 
         return finished_sending or None, finished_recving or None
 
