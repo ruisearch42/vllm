@@ -124,7 +124,7 @@ wait_for_server() {
 
 main() {
     check_required_files
-    check_hf_token
+    # check_hf_token
     check_num_gpus
     ensure_python_library_installed pandas
     ensure_python_library_installed datasets
@@ -231,7 +231,7 @@ main() {
     # Run Benchmark
     # =============================================================================
     cd ../../../benchmarks/
-    vllm bench serve --port 10001 --seed $(date +%s) \
+    vllm bench serve --port 8000 --seed $(date +%s) \
         --model $MODEL \
         --dataset-name random --random-input-len 7500 --random-output-len 200 \
         --num-prompts 200 --burstiness 100 --request-rate 2 | tee benchmark.log
