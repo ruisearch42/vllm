@@ -4,40 +4,29 @@ This diagram shows the detailed process of scaling up the elastic EP (Expert Par
 
 ```mermaid
 sequenceDiagram
-    participant Client as HTTP Client
-    participant API as API Server
-    participant AsyncLLM as AsyncLLM Engine
-    participant CoreClient as DPLBAsyncMPClient
+    participant Client as Client
+    participant Engine as vLLM Engine
     participant Ray as Ray Cluster
-    participant NewEngine as New Engine Core
-    participant ExistingEngine as Existing Engine Core
+    participant NewEngineCore as New EngineCore
     participant Worker as GPU Worker
     participant ModelRunner as GPU Model Runner
+    
+    Client->>Engine: scale_elastic_ep(new_size=4)
+    Engine->>Engine: Determine scale_up (4 > 2)
 
-    Client->>API: POST /scale_elastic_ep<br/>{new_data_parallel_size: 4, drain_timeout: 120}
-    API->>API: Validate parameters
-    
-    API->>AsyncLLM: scale_elastic_ep(new_size=4)
-    
-    AsyncLLM->>AsyncLLM: wait_for_requests_to_drain(timeout=120)
-    
-    AsyncLLM->>CoreClient: scale_elastic_ep(4)
-    CoreClient->>CoreClient: Determine scale_up (4 > 2)
-
-    Note over CoreClient: Create new engines via Ray   
+    Engine->>Ray: create_new_engine_core(2)  
     loop For each new engine
-        Ray->>NewEngine: Start new engine core process
-        NewEngine->>Worker: Initialize GPU Worker
+        Ray->>NewEngineCore: Start new EngineCore process
+        NewEngineCore->>Worker: Initialize GPU Worker
         Note over Worker: Initialize distributed environment & communicators
         
         Note over Worker: Model loading for scale up
         Worker->>ModelRunner: load_model(eep_scale_up=True)
         Note over ModelRunner: Receive EPLB state from existing engines
         
-        Note over ModelRunner: Load and configure model
-        
-        NewEngine->>CoreClient: Send ready message
+        Note over ModelRunner: Load and configure model        
     end
+
 ```
 
 ## Key Scale Up Processes

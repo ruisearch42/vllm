@@ -4,51 +4,33 @@ This diagram shows the detailed process of scaling down the elastic EP (Expert P
 
 ```mermaid
 sequenceDiagram
-    participant Client as HTTP Client
-    participant API as API Server
-    participant AsyncLLM as AsyncLLM Engine
-    participant CoreClient as DPLBAsyncMPClient
-    participant ShutdownEngine as Engine to Shutdown
-    participant KeepEngine as Engine to Keep
-    participant Worker as GPU Worker
-
-    Client->>API: POST /scale_elastic_ep<br/>{new_data_parallel_size: 2, drain_timeout: 120}
-    API->>API: Validate parameters
+    participant Client as Client
+    participant Engine as vLLM Engine
+    participant ShutdownEngineCore as EngineCore to shutdown
+    participant KeepEngineCore as EngineCore to keep
+    participant Worker1 as GPU Worker
+    participant Worker2 as GPU Worker
     
-    API->>AsyncLLM: scale_elastic_ep(2, 120)
+    Client->>Engine: scale_elastic_ep(new_size=2)
+    Engine->>Engine: Determine scale_down (2 < 4)
     
-    AsyncLLM->>AsyncLLM: wait_for_requests_to_drain(120)
-    Note over AsyncLLM: Wait for all active requests to complete
-    
-    AsyncLLM->>CoreClient: scale_elastic_ep(2)
-    CoreClient->>CoreClient: Determine scale_down (2 < 4)
-    
-    Note over CoreClient: Send reconfig messages to all engines
-    loop For each engine (keep and shutdown)
-        alt Engine rank < new_size (Keep)
-            CoreClient->>KeepEngine: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_dp_size=2)
-            KeepEngine->>Worker: reinitialize_distributed(reconfig_request)
+    loop For each EngineCore
+        alt EngineCore rank < new_size (keep)
+            Engine->>KeepEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=2)
+            KeepEngineCore->>Worker1: reinitialize_distributed(reconfig_request)
             
-            Note over Worker: A series of reconfiguration steps (similar as scaling up)
-            Note over Worker: Run EPLB reshuffle
+            Note over Worker1: A series of reconfiguration steps (similar as scaling up)
+            Note over Worker1: Run EPLB reshuffle
             
-            KeepEngine-->>CoreClient: Reconfiguration completed
+        else EngineCore rank >= new_size (shutdown)
+            Engine->>ShutdownEngineCore: Send ReconfigRequest<br/>(SHUTDOWN_CURRENT_RANK, new_dp_size=2)
+            ShutdownEngineCore->>Worker2: reinitialize_distributed(reconfig_request)
             
-        else Engine rank >= new_size (Shutdown)
-            CoreClient->>ShutdownEngine: Send ReconfigRequest<br/>(SHUTDOWN_CURRENT_RANK, new_dp_size=2)
-            ShutdownEngine->>Worker: reinitialize_distributed(reconfig_request)
+            Note over Worker2: Pre-shutdown EPLB reshuffle
+            Note over Worker2: Clean up distributed environment & communicators
             
-            Note over Worker: Pre-shutdown EPLB reshuffle
-            Note over Worker: Clean up distributed environment & communicators
-            
-            ShutdownEngine-->>CoreClient: Shutdown completed
         end
     end
-    
-    CoreClient-->>AsyncLLM: Scale down completed
-    
-    AsyncLLM-->>API: Scaling completed
-    API-->>Client: 200 OK<br/>{message: "Scaled to 2 data parallel engines"}
 ```
 
 ## Key Scale Down Processes

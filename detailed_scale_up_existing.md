@@ -4,27 +4,17 @@ This diagram shows the detailed process of scaling up the elastic EP (Expert Par
 
 ```mermaid
 sequenceDiagram
-    participant Client as HTTP Client
-    participant API as API Server
-    participant AsyncLLM as AsyncLLM Engine
-    participant CoreClient as DPLBAsyncMPClient
-    participant ExistingEngine as Existing Engine Core
+    participant Client as Client
+    participant Engine as vLLM Engine
+    participant ExistingEngineCore as Existing EngineCore
     participant Worker as GPU Worker
-
-    Client->>API: POST /scale_elastic_ep<br/>{new_data_parallel_size: 4, drain_timeout: 120}
-    API->>API: Validate parameters
     
-    API->>AsyncLLM: scale_elastic_ep(new_size=4)
+    Client->>Engine: scale_elastic_ep(new_size=4)
+    Engine->>Engine: Determine scale_up (4 > 2)
     
-    AsyncLLM->>AsyncLLM: wait_for_requests_to_drain(timeout=120)
-    
-    AsyncLLM->>CoreClient: scale_elastic_ep(4)
-    CoreClient->>CoreClient: Determine scale_up (4 > 2)
-    
-    Note over CoreClient: Send reconfig messages to existing engines
-    loop For each existing engine
-        CoreClient->>ExistingEngine: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_dp_size=4)
-        ExistingEngine->>Worker: reinitialize_distributed(reconfig_request)
+    loop For each existing EngineCore
+        Engine->>ExistingEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=4)
+        ExistingEngineCore->>Worker: reinitialize_distributed(reconfig_request)
         
         Note over Worker: Collect expert load statistics
         
@@ -38,7 +28,6 @@ sequenceDiagram
         
         Note over Worker: Run EPLB reshuffle
         
-        Worker-->>CoreClient: Reconfiguration completed
     end
 ```
 
