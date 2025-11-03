@@ -11,8 +11,8 @@ sequenceDiagram
     participant Worker as GPU Worker
     participant ModelRunner as GPU Model Runner
     
-    Client->>Engine: scale_elastic_ep(new_size=4)
-    Engine->>Engine: Determine scale_up (4 > 2)
+    Client->>Engine: scale_elastic_ep(new_size=6)
+    Engine->>Engine: Determine scale_up (6 > 4)
 
     Engine->>Ray: create_new_engine_core(2)  
     loop For each new engine

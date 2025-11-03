@@ -9,11 +9,11 @@ sequenceDiagram
     participant ExistingEngineCore as Existing EngineCore
     participant Worker as GPU Worker
     
-    Client->>Engine: scale_elastic_ep(new_size=4)
-    Engine->>Engine: Determine scale_up (4 > 2)
+    Client->>Engine: scale_elastic_ep(new_size=6)
+    Engine->>Engine: Determine scale_up (6 > 4)
     
     loop For each existing EngineCore
-        Engine->>ExistingEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=4)
+        Engine->>ExistingEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=6)
         ExistingEngineCore->>Worker: reinitialize_distributed(reconfig_request)
         
         Note over Worker: Collect expert load statistics

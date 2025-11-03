@@ -11,19 +11,19 @@ sequenceDiagram
     participant Worker1 as GPU Worker
     participant Worker2 as GPU Worker
     
-    Client->>Engine: scale_elastic_ep(new_size=2)
-    Engine->>Engine: Determine scale_down (2 < 4)
+    Client->>Engine: scale_elastic_ep(new_size=5)
+    Engine->>Engine: Determine scale_down (5 < 6)
     
     loop For each EngineCore
         alt EngineCore rank < new_size (keep)
-            Engine->>KeepEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=2)
+            Engine->>KeepEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=5)
             KeepEngineCore->>Worker1: reinitialize_distributed(reconfig_request)
             
             Note over Worker1: A series of reconfiguration steps (similar as scaling up)
             Note over Worker1: Run EPLB reshuffle
             
         else EngineCore rank >= new_size (shutdown)
-            Engine->>ShutdownEngineCore: Send ReconfigRequest<br/>(SHUTDOWN_CURRENT_RANK, new_dp_size=2)
+            Engine->>ShutdownEngineCore: Send ReconfigRequest<br/>(SHUTDOWN_CURRENT_RANK, new_dp_size=5)
             ShutdownEngineCore->>Worker2: reinitialize_distributed(reconfig_request)
             
             Note over Worker2: Pre-shutdown EPLB reshuffle
