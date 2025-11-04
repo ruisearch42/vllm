@@ -15,9 +15,7 @@ sequenceDiagram
     loop For each existing EngineCore
         Engine->>ExistingEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=6)
         ExistingEngineCore->>Worker: reinitialize_distributed(reconfig_request)
-        
-        Note over Worker: Collect expert load statistics
-        
+                
         Note over Worker: Destroy distributed environment & communicators
         
         Note over Worker: Update parallel configuration
