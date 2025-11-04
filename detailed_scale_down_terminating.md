@@ -18,9 +18,9 @@ sequenceDiagram
         alt EngineCore rank < new_size (keep)
             Engine->>KeepEngineCore: Send ReconfigRequest<br/>(KEEP_CURRENT_RANK, new_size=5)
             KeepEngineCore->>Worker1: reinitialize_distributed(reconfig_request)
-            
-            Note over Worker1: A series of reconfiguration steps (similar as scaling up)
+
             Note over Worker1: Run EPLB reshuffle
+            Note over Worker1: A series of reconfiguration steps (similar to scaling up)
             
         else EngineCore rank >= new_size (shutdown)
             Engine->>ShutdownEngineCore: Send ReconfigRequest<br/>(SHUTDOWN_CURRENT_RANK, new_dp_size=5)
@@ -85,4 +85,3 @@ sequenceDiagram
 - Synchronize expert weight transfers
 - Ensure all engines complete reconfiguration before shutdown
 - Maintain distributed system consistency
-
