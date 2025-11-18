@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 import regex as re
 import torch
@@ -86,6 +86,10 @@ class P2pNcclConnector(KVConnectorBase_V1):
             port_offset=self._rank,
         ) if role == KVConnectorRole.WORKER else None
 
+        # Track pending layer loads for layer-by-layer pipelining
+        # Maps (request_id, layer_name) -> (remote_address, block_ids, layer_tensor, virtual_engine)
+        self._pending_layer_loads: dict[Tuple[str, str], Tuple[str, torch.Tensor, torch.Tensor, int]] = {}
+
     # ==============================
     # Worker-side methods
     # ==============================
@@ -110,64 +114,6 @@ class P2pNcclConnector(KVConnectorBase_V1):
 
         assert self.p2p_nccl_engine is not None
 
-        attn_metadata = forward_context.attn_metadata
-        if attn_metadata is None:
-            return
-
-        def inject_kv_into_layer(
-            layer: torch.Tensor,
-            kv_cache: torch.Tensor,
-            block_ids: torch.Tensor,
-            request_id: str,
-        ) -> None:
-            """
-            Inject KV cache data into a given attention layer tensor.
-
-            This function updates `layer` in-place with values from `kv_cache`,
-            handling different backend layouts:
-              - MLA (Multi-Linear Attention) or FlashInfer: KV tensors are
-                indexed along the first dimension.
-              - FlashAttention: KV tensors are indexed along the second
-                dimension.
-
-            If the number of provided block IDs does not match the number of KV
-            blocks, only the overlapping portion is updated, and a warning is
-            logged.
-
-            Args:
-                layer (torch.Tensor): The attention layer KV tensor to update.
-                kv_cache (torch.Tensor): The KV cache tensor to inject.
-                block_ids (torch.Tensor): Indices of the blocks to update.
-                request_id (str): Request identifier used for logging.
-
-            Returns:
-                None. The function modifies `layer` in-place.
-            """
-            if (isinstance(attn_metadata, MLACommonMetadata)
-                    or layer.shape[1] == 2):  # MLA or FlashInfer
-                num_block = kv_cache.shape[0]
-                self.check_tensors_except_dim(layer, kv_cache, 0)
-                if len(block_ids) == num_block:
-                    layer[block_ids, ...] = kv_cache
-                else:
-                    layer[block_ids[:num_block], ...] = kv_cache
-                    logger.warning(
-                        "🚧kv_cache does not match, block_ids:%d, "
-                        "num_block:%d, request_id:%s", len(block_ids),
-                        num_block, request_id)
-
-            elif layer.shape[0] == 2:  # FlashAttention
-                num_block = kv_cache.shape[1]
-                self.check_tensors_except_dim(layer, kv_cache, 1)
-                if len(block_ids) == num_block:
-                    layer[:, block_ids, ...] = kv_cache
-                else:
-                    layer[:, block_ids[:num_block], ...] = kv_cache
-                    logger.warning(
-                        "🚧kv_cache does not match, block_ids:%d, "
-                        "num_block:%d, request_id:%s", len(block_ids),
-                        num_block, request_id)
-
         # Get the metadata
         metadata: KVConnectorMetadata = \
             self._get_connector_metadata()
@@ -176,7 +122,12 @@ class P2pNcclConnector(KVConnectorBase_V1):
         if metadata is None:
             return
 
-        # Load the KV for each request each layer
+        # Clear previous pending loads
+        self._pending_layer_loads.clear()
+
+        # Store metadata for layer-by-layer pipelining
+        # The actual receive happens asynchronously via the listener thread
+        # We'll wait for and inject each layer in wait_for_layer_load()
         for request in metadata.requests:
             request_id = request.request_id
             ip, port = self.parse_request_id(request_id, False)
@@ -191,28 +142,122 @@ class P2pNcclConnector(KVConnectorBase_V1):
                 if kv_cache is None:
                     continue
 
-                layer = kv_cache[forward_context.virtual_engine]
+                layer_tensor = kv_cache[forward_context.virtual_engine]
 
-                kv_cache = self.p2p_nccl_engine.recv_tensor(
-                    request.request_id + "#" + layer_name, remote_address)
-
-                if kv_cache is None:
-                    logger.warning("🚧kv_cache is None, %s", request.request_id)
-                    continue
-
-                inject_kv_into_layer(layer, kv_cache, request.block_ids,
-                                     request.request_id)
+                # Store metadata for this layer - will be loaded in wait_for_layer_load()
+                self._pending_layer_loads[(request_id, layer_name)] = (
+                    remote_address,
+                    request.block_ids,
+                    layer_tensor,
+                    forward_context.virtual_engine,
+                )
 
     def wait_for_layer_load(self, layer_name: str) -> None:
         """Blocking until the KV for a specific layer is loaded into vLLM's
         paged buffer.
 
         This interface will be useful for layer-by-layer pipelining.
+        It waits for the KV cache to be received (via async listener thread),
+        injects it into the layer, and synchronizes all TP ranks to prevent
+        NCCL deadlocks.
 
         Args:
             layer_name: the name of that layer
         """
-        return
+        # Only consumer/decode loads KV Cache
+        if self.is_producer:
+            return
+
+        assert self.p2p_nccl_engine is not None
+
+        # Safety check: This should not be called during CUDA graph capture
+        # since unified_attention is tagged as cudagraph_unsafe, but add
+        # defensive check for safety
+        from vllm.forward_context import get_forward_context
+        from vllm.config import CUDAGraphMode
+        forward_context = get_forward_context()
+        if (forward_context is not None and
+                forward_context.cudagraph_runtime_mode != CUDAGraphMode.NONE):
+            # This shouldn't happen, but log a warning if it does
+            logger.warning(
+                "wait_for_layer_load called during CUDA graph mode "
+                "(mode=%s) for layer %s. This should not happen as "
+                "unified_attention is tagged as cudagraph_unsafe. "
+                "Proceeding anyway, but this may cause issues.",
+                forward_context.cudagraph_runtime_mode, layer_name)
+
+        # Find pending loads for this layer
+        # There may be multiple requests, so we process all of them
+        layers_to_load = [
+            (request_id, remote_address, block_ids, layer_tensor, virtual_engine)
+            for (request_id, lname), (remote_address, block_ids, layer_tensor, virtual_engine)
+            in self._pending_layer_loads.items()
+            if lname == layer_name
+        ]
+
+        if not layers_to_load:
+            # No pending loads for this layer - might be a non-attention layer
+            return
+
+        # Wait for and inject KV cache for each request
+        for request_id, remote_address, block_ids, layer_tensor, virtual_engine in layers_to_load:
+            tensor_id = request_id + "#" + layer_name
+
+            # Wait for the tensor to be received (async listener thread handles the receive)
+            kv_cache = self.p2p_nccl_engine.recv_tensor(tensor_id, remote_address)
+
+            if kv_cache is None:
+                logger.warning("🚧kv_cache is None for layer %s, request %s",
+                             layer_name, request_id)
+                continue
+
+            # Inject KV cache into the layer
+            # We need attn_metadata for inject_kv_into_layer
+            # forward_context was already retrieved above for the safety check
+            attn_metadata = forward_context.attn_metadata
+
+            if attn_metadata is None:
+                logger.warning("🚧attn_metadata is None, cannot inject KV cache")
+                continue
+
+            # Use the same injection logic as before
+            if (isinstance(attn_metadata, MLACommonMetadata)
+                    or layer_tensor.shape[1] == 2):  # MLA or FlashInfer
+                num_block = kv_cache.shape[0]
+                self.check_tensors_except_dim(layer_tensor, kv_cache, 0)
+                if len(block_ids) == num_block:
+                    layer_tensor[block_ids, ...] = kv_cache
+                else:
+                    layer_tensor[block_ids[:num_block], ...] = kv_cache
+                    logger.warning(
+                        "🚧kv_cache does not match, block_ids:%d, "
+                        "num_block:%d, request_id:%s", len(block_ids),
+                        num_block, request_id)
+
+            elif layer_tensor.shape[0] == 2:  # FlashAttention
+                num_block = kv_cache.shape[1]
+                self.check_tensors_except_dim(layer_tensor, kv_cache, 1)
+                if len(block_ids) == num_block:
+                    layer_tensor[:, block_ids, ...] = kv_cache
+                else:
+                    layer_tensor[:, block_ids[:num_block], ...] = kv_cache
+                    logger.warning(
+                        "🚧kv_cache does not match, block_ids:%d, "
+                        "num_block:%d, request_id:%s", len(block_ids),
+                        num_block, request_id)
+
+        # CRITICAL: Synchronize all TP ranks before proceeding
+        # This prevents NCCL deadlocks when different ranks receive KV cache
+        # at different times and then try to participate in TP collectives
+        from vllm.distributed.parallel_state import get_tp_group
+        try:
+            tp_group = get_tp_group()
+            if tp_group is not None:
+                tp_group.barrier()
+        except AssertionError:
+            # TP group not initialized (e.g., single GPU or non-TP setup)
+            # This is fine - no synchronization needed
+            pass
 
     def save_kv_layer(self, layer_name: str, kv_layer: torch.Tensor,
                       attn_metadata: "AttentionMetadata",
